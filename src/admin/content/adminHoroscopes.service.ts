@@ -1,0 +1,181 @@
+// Admin horoscopes service: CRUD + bulk generation + publish/unpublish.
+// Bulk generation enqueues a BullMQ job — it never blocks the HTTP handler.
+
+import { eq, and, gte, lte, desc } from 'drizzle-orm';
+import { db } from '../../db/client.js';
+import { horoscopes } from '../../db/schema/content.js';
+import { AppError } from '../../lib/errors.js';
+import { writeAuditLog } from '../../observability/auditLogger.js';
+import { horoscopeQueue } from '../../jobs/queues.js';
+import type {
+  HoroscopeListQuery,
+  CreateHoroscopeInput,
+  UpdateHoroscopeInput,
+  BulkGenerateInput,
+  SetPublishedInput,
+} from './adminHoroscopes.schema.js';
+
+// ── List ──────────────────────────────────────────────────────────────────────
+
+export async function listHoroscopes(q: HoroscopeListQuery) {
+  const rows = await db.query.horoscopes.findMany({
+    where: (t, { and: _and, eq: _eq, gte: _gte, lte: _lte }) => {
+      const conditions = [];
+      if (q.sign)        conditions.push(_eq(t.sign, q.sign));
+      if (q.period)      conditions.push(_eq(t.period, q.period));
+      if (q.periodKey)   conditions.push(_eq(t.periodKey, q.periodKey));
+      if (q.isPublished !== undefined) conditions.push(_eq(t.isPublished, q.isPublished));
+      if (q.from)        conditions.push(_gte(t.createdAt, new Date(q.from)));
+      if (q.to)          conditions.push(_lte(t.createdAt, new Date(q.to)));
+      return conditions.length ? _and(...conditions) : undefined;
+    },
+    orderBy: (t) => [desc(t.createdAt)],
+    limit: q.limit ?? 20,
+    offset: ((q.page ?? 1) - 1) * (q.limit ?? 20),
+  });
+
+  const total = rows.length; // good enough for now — swap for COUNT(*) if perf matters
+  return {
+    items: rows,
+    page: q.page ?? 1,
+    limit: q.limit ?? 20,
+    total,
+    totalPages: Math.ceil(total / (q.limit ?? 20)),
+  };
+}
+
+// ── Get one ───────────────────────────────────────────────────────────────────
+
+export async function getHoroscope(id: string) {
+  const row = await db.query.horoscopes.findFirst({ where: eq(horoscopes.id, id) });
+  if (!row) throw new AppError('NOT_FOUND', `Horoscope ${id} not found.`, 404);
+  return row;
+}
+
+// ── Create ────────────────────────────────────────────────────────────────────
+
+export async function createHoroscope(adminId: string, input: CreateHoroscopeInput) {
+  const [row] = await db.insert(horoscopes).values({
+    sign: input.sign,
+    period: input.period,
+    periodKey: input.periodKey,
+    date: input.period === 'daily' ? input.periodKey : '',
+    content: input.content,
+    sections: input.sections ?? null,
+    luckyColor: input.luckyColor ?? null,
+    luckyNumber: input.luckyNumber ?? null,
+    luckyDay: input.luckyDay ?? null,
+    isPublished: input.isPublished,
+    source: 'manual',
+    generatedAt: new Date(),
+  }).returning();
+
+  await writeAuditLog({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'horoscope.create',
+    targetType: 'horoscope',
+    targetId: row.id,
+    summary: `Created ${input.period} horoscope for ${input.sign} (${input.periodKey})`,
+    afterState: row,
+  });
+
+  return row;
+}
+
+// ── Update ────────────────────────────────────────────────────────────────────
+
+export async function updateHoroscope(adminId: string, id: string, input: UpdateHoroscopeInput) {
+  const existing = await getHoroscope(id);
+
+  const [updated] = await db.update(horoscopes)
+    .set({
+      ...(input.content !== undefined && { content: input.content }),
+      ...(input.sections !== undefined && { sections: input.sections }),
+      ...(input.luckyColor !== undefined && { luckyColor: input.luckyColor }),
+      ...(input.luckyNumber !== undefined && { luckyNumber: input.luckyNumber }),
+      ...(input.luckyDay !== undefined && { luckyDay: input.luckyDay }),
+      ...(input.isPublished !== undefined && { isPublished: input.isPublished }),
+      updatedAt: new Date(),
+    })
+    .where(eq(horoscopes.id, id))
+    .returning();
+
+  await writeAuditLog({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'horoscope.update',
+    targetType: 'horoscope',
+    targetId: id,
+    summary: `Updated ${existing.period} horoscope for ${existing.sign} (${existing.periodKey})`,
+    beforeState: existing,
+    afterState: updated,
+  });
+
+  return updated;
+}
+
+// ── Delete ────────────────────────────────────────────────────────────────────
+
+export async function deleteHoroscope(adminId: string, id: string) {
+  const existing = await getHoroscope(id);
+
+  await db.delete(horoscopes).where(eq(horoscopes.id, id));
+
+  await writeAuditLog({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'horoscope.delete',
+    targetType: 'horoscope',
+    targetId: id,
+    summary: `Deleted ${existing.period} horoscope for ${existing.sign} (${existing.periodKey})`,
+    beforeState: existing,
+  });
+}
+
+// ── Publish / unpublish ───────────────────────────────────────────────────────
+
+export async function setPublished(adminId: string, id: string, input: SetPublishedInput) {
+  const existing = await getHoroscope(id);
+
+  await db.update(horoscopes)
+    .set({ isPublished: input.isPublished, updatedAt: new Date() })
+    .where(eq(horoscopes.id, id));
+
+  await writeAuditLog({
+    actorType: 'admin',
+    actorId: adminId,
+    action: input.isPublished ? 'horoscope.publish' : 'horoscope.unpublish',
+    targetType: 'horoscope',
+    targetId: id,
+    summary: `${input.isPublished ? 'Published' : 'Unpublished'} ${existing.period} horoscope for ${existing.sign}`,
+    beforeState: { isPublished: existing.isPublished },
+    afterState: { isPublished: input.isPublished },
+  });
+}
+
+// ── Bulk generate ─────────────────────────────────────────────────────────────
+
+export async function bulkGenerate(adminId: string, input: BulkGenerateInput) {
+  const jobId = `horoscope-${input.period}-${input.periodKey}`;
+
+  await horoscopeQueue.add(
+    jobId,
+    { period: input.period, periodKey: input.periodKey, source: input.source },
+    {
+      jobId,
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 60_000 },
+    },
+  );
+
+  await writeAuditLog({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'horoscope.bulkGenerate',
+    summary: `Queued bulk ${input.period} horoscope generation for ${input.periodKey} via ${input.source}`,
+    metadata: { period: input.period, periodKey: input.periodKey, source: input.source, jobId },
+  });
+
+  return { jobId, queued: true };
+}
