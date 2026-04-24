@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, bigint, numeric, timestamp, boolean, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, integer, doublePrecision, numeric, timestamp, boolean, index } from 'drizzle-orm/pg-core';
 import { customers } from './customers';
 import { astrologers } from './astrologers';
 
@@ -8,16 +8,16 @@ export const consultations = pgTable('consultations', {
   astrologerId: uuid('astrologerId').notNull().references(() => astrologers.id),
   type: text('type').notNull(), // chat | voice | video
   status: text('status').notNull(), // requested | accepted | active | ended | rejected | cancelled
-  pricePerMinPaise: integer('pricePerMinPaise').notNull(),
+  pricePerMin: doublePrecision('pricePerMin').notNull(),
   commissionPct: numeric('commissionPct', { precision: 5, scale: 2 }).notNull(),
   requestedAt: timestamp('requestedAt', { withTimezone: true }).notNull().defaultNow(),
   acceptedAt: timestamp('acceptedAt', { withTimezone: true }),
   startedAt: timestamp('startedAt', { withTimezone: true }),
   endedAt: timestamp('endedAt', { withTimezone: true }),
   durationSeconds: integer('durationSeconds').notNull().default(0),
-  totalChargedPaise: bigint('totalChargedPaise', { mode: 'bigint' }).notNull().$defaultFn(() => BigInt(0)),
-  astrologerEarningPaise: bigint('astrologerEarningPaise', { mode: 'bigint' }).notNull().$defaultFn(() => BigInt(0)),
-  platformEarningPaise: bigint('platformEarningPaise', { mode: 'bigint' }).notNull().$defaultFn(() => BigInt(0)),
+  totalCharged: doublePrecision('totalCharged').notNull().default(0),
+  astrologerEarning: doublePrecision('astrologerEarning').notNull().default(0),
+  platformEarning: doublePrecision('platformEarning').notNull().default(0),
   endReason: text('endReason'), // userEnded | astrologerEnded | lowBalance | timeout | error
   agoraChannelName: text('agoraChannelName'),
   traceId: text('traceId'),
@@ -59,10 +59,10 @@ export const astrologerEarnings = pgTable('astrologerEarnings', {
   id: uuid('id').primaryKey().defaultRandom(),
   astrologerId: uuid('astrologerId').notNull().references(() => astrologers.id),
   consultationId: uuid('consultationId').notNull().references(() => consultations.id),
-  grossPaise: bigint('grossPaise', { mode: 'bigint' }).notNull(),
+  gross: bigint('gross', { mode: 'bigint' }).notNull(),
   commissionPct: numeric('commissionPct', { precision: 5, scale: 2 }).notNull(),
-  commissionPaise: bigint('commissionPaise', { mode: 'bigint' }).notNull(),
-  netPaise: bigint('netPaise', { mode: 'bigint' }).notNull(),
+  commission: bigint('commission', { mode: 'bigint' }).notNull(),
+  net: bigint('net', { mode: 'bigint' }).notNull(),
   settledPayoutId: uuid('settledPayoutId'),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -72,7 +72,7 @@ export const payouts = pgTable('payouts', {
   astrologerId: uuid('astrologerId').notNull().references(() => astrologers.id),
   providerKey: text('providerKey').notNull(),
   providerPayoutId: text('providerPayoutId'),
-  amountPaise: bigint('amountPaise', { mode: 'bigint' }).notNull(),
+  amount: bigint('amount', { mode: 'bigint' }).notNull(),
   status: text('status').notNull(), // queued | processing | processed | failed
   periodStart: timestamp('periodStart', { withTimezone: true }).notNull(),
   periodEnd: timestamp('periodEnd', { withTimezone: true }).notNull(),

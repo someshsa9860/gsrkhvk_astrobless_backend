@@ -7,6 +7,7 @@ import {
   VerifyEmailOtpSchema,
   EmailLoginSchema,
   RefreshTokenSchema,
+  AppleAuthSchema,
 } from './astrologerAuth.schema.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
@@ -41,5 +42,10 @@ export const astrologerAuthRoutes: FastifyPluginAsync = async (app) => {
   app.post(`${prefix}/refresh`, {
     schema: { tags: ['astrologer:auth'], summary: 'Rotate refresh token', body: zodToJsonSchema(RefreshTokenSchema) },
     handler: ctrl.refreshToken,
+  });
+
+  app.post(`${prefix}/apple`, {
+    schema: { tags: ['astrologer:auth'], summary: 'Sign in / sign up with Apple', body: zodToJsonSchema(AppleAuthSchema) },
+    handler: ctrl.appleAuth,
   });
 };

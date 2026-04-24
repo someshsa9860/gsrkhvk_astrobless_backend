@@ -14,6 +14,11 @@ export interface RequestContext {
   userAgent?: string;
   appVersion?: string;
   platform?: string;
+  deviceId?: string;
+  deviceModel?: string;
+  deviceName?: string;
+  osName?: string;
+  osVersion?: string;
 }
 
 export const requestContextStorage = new AsyncLocalStorage<RequestContext>();

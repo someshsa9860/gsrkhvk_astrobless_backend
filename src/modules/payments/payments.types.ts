@@ -14,7 +14,7 @@ export enum PaymentProviderCapability {
 
 export interface CreateOrderInput {
   customerId: string;
-  amountPaise: number;
+  amount: number;
   currency: string;
   idempotencyKey: string;
   metadata?: Record<string, unknown>;
@@ -31,13 +31,13 @@ export interface ProviderWebhookEvent {
   eventType: 'paymentSucceeded' | 'paymentFailed' | 'refundProcessed' | 'payoutProcessed' | 'payoutFailed' | 'unknown';
   providerOrderId?: string;
   providerPaymentId?: string;
-  amountPaise?: number;
+  amount?: number;
   raw: unknown;
 }
 
 export interface PayoutInput {
   astrologerId: string;
-  amountPaise: number;
+  amount: number;
   beneficiaryRef: string;
   idempotencyKey: string;
 }
@@ -54,5 +54,5 @@ export interface PaymentProvider {
   verifyWebhook(input: { headers: Record<string, string>; rawBody: Buffer }): Promise<{ isValid: boolean; event: ProviderWebhookEvent }>;
   fetchOrder(providerOrderId: string): Promise<ProviderWebhookEvent>;
   createPayout?(input: PayoutInput): Promise<PayoutResult>;
-  refund?(providerPaymentId: string, amountPaise: number, idempotencyKey: string): Promise<ProviderWebhookEvent>;
+  refund?(providerPaymentId: string, amount: number, idempotencyKey: string): Promise<ProviderWebhookEvent>;
 }

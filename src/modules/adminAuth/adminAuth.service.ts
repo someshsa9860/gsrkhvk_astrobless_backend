@@ -13,6 +13,7 @@ import { sendSmsOtp } from '../../lib/sms.js';
 import { setTempToken, getTempToken, deleteTempToken, adminTempTokenKey } from '../../lib/redis.js';
 import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../observability/auditLogger.js';
+import { verifyGoogleToken } from '../../lib/tokenVerifier.js';
 import type { TokenPair } from '../../lib/jwt.js';
 import { JWT_AUDIENCE } from '../../config/constants.js';
 import { env } from '../../config/env.js';
@@ -109,16 +110,8 @@ export async function skipTotp(tempToken: string): Promise<TokenPair & { admin: 
 // Verifies a Google ID token issued to this app's client ID.
 // Returns a tempToken if the email matches an active admin account.
 export async function loginWithGoogle(idToken: string): Promise<{ tempToken: string; requiresTotpEnrollment: boolean }> {
-  const { OAuth2Client } = await import('google-auth-library');
-  const client = new OAuth2Client(env.GOOGLE_OAUTH_CLIENT_ID);
-
-  let email: string;
-  try {
-    const ticket = await client.verifyIdToken({ idToken, audience: env.GOOGLE_OAUTH_CLIENT_ID });
-    email = ticket.getPayload()?.email ?? '';
-  } catch {
-    throw new AppError('AUTH_REQUIRED', 'Invalid Google token.', 401);
-  }
+  const payload = await verifyGoogleToken(idToken, env.GOOGLE_OAUTH_CLIENT_ID);
+  const email = payload.email;
 
   if (!email) throw new AppError('AUTH_REQUIRED', 'Google token has no email.', 401);
 

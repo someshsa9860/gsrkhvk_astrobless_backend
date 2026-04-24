@@ -16,7 +16,7 @@ export async function getProviders(req: FastifyRequest, reply: FastifyReply) {
 export async function initiateTopup(req: FastifyRequest<{ Body: z.infer<typeof TopupSchema> }>, reply: FastifyReply) {
   const result = await service.initiateTopup(
     req.requestContext.actorId!,
-    req.body.amountPaise,
+    req.body.amount,
     req.body.providerKey,
     req.body.idempotencyKey,
   );

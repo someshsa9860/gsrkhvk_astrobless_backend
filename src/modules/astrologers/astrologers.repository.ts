@@ -28,7 +28,7 @@ export async function search(params: z.infer<typeof SearchAstrologersQuerySchema
   if (params.minRating) conditions.push(gte(astrologers.ratingAvg, String(params.minRating)));
   if (params.q) conditions.push(ilike(astrologers.displayName, `%${params.q}%`));
 
-  const orderCol = params.sort === 'price' ? astrologers.pricePerMinChatPaise
+  const orderCol = params.sort === 'price' ? astrologers.pricePerMinChat
     : params.sort === 'experience' ? astrologers.experienceYears
     : params.sort === 'consultations' ? astrologers.totalConsultations
     : astrologers.ratingAvg;

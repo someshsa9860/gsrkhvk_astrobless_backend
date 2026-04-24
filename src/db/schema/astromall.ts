@@ -7,7 +7,7 @@ export const products = pgTable('products', {
   sku: text('sku').unique().notNull(),
   title: text('title').notNull(),
   description: text('description'),
-  pricePaise: bigint('pricePaise', { mode: 'bigint' }).notNull(),
+  price: bigint('price', { mode: 'bigint' }).notNull(),
   category: text('category'),
   images: text('images').array().notNull().default([]),
   stock: integer('stock').notNull().default(0),
@@ -18,7 +18,7 @@ export const products = pgTable('products', {
 export const orders = pgTable('orders', {
   id: uuid('id').primaryKey().defaultRandom(),
   customerId: uuid('customerId').notNull().references(() => customers.id),
-  totalPaise: bigint('totalPaise', { mode: 'bigint' }).notNull(),
+  total: bigint('total', { mode: 'bigint' }).notNull(),
   status: text('status').notNull(), // pending | confirmed | shipped | delivered | cancelled
   shippingAddress: jsonb('shippingAddress'),
   paymentOrderId: uuid('paymentOrderId').references(() => paymentOrders.id),
@@ -31,7 +31,7 @@ export const orderItems = pgTable('orderItems', {
   orderId: uuid('orderId').notNull().references(() => orders.id, { onDelete: 'cascade' }),
   productId: uuid('productId').notNull().references(() => products.id),
   qty: integer('qty').notNull(),
-  pricePaise: bigint('pricePaise', { mode: 'bigint' }).notNull(),
+  price: bigint('price', { mode: 'bigint' }).notNull(),
 });
 
 export type Product = typeof products.$inferSelect;

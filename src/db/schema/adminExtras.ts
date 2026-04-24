@@ -51,9 +51,27 @@ export const cronRuns = pgTable('cronRuns', {
   jobNameStartedAtIdx: index('idx_cronRuns_jobName_startedAt').on(t.jobName, t.startedAt),
 }));
 
+// ── adminCustomRoles: admin-created custom roles with custom permission sets ───
+
+export const adminCustomRoles = pgTable('adminCustomRoles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  slug: text('slug').notNull().unique(),
+  description: text('description'),
+  permissions: text('permissions').array().notNull().default([]),
+  isSystem: boolean('isSystem').notNull().default(false),
+  createdBy: uuid('createdBy').references(() => admins.id),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  slugIdx: index('idx_adminCustomRoles_slug').on(t.slug),
+}));
+
 export type AppSetting = typeof appSettings.$inferSelect;
 export type NewAppSetting = typeof appSettings.$inferInsert;
 export type ExportJob = typeof exportJobs.$inferSelect;
 export type NewExportJob = typeof exportJobs.$inferInsert;
 export type CronRun = typeof cronRuns.$inferSelect;
 export type NewCronRun = typeof cronRuns.$inferInsert;
+export type AdminCustomRole = typeof adminCustomRoles.$inferSelect;
+export type NewAdminCustomRole = typeof adminCustomRoles.$inferInsert;

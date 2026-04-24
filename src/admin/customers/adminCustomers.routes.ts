@@ -10,12 +10,26 @@ import {
   CustomerListQuerySchema,
   BlockCustomerSchema,
   WalletAdjustSchema,
+  CreateCustomerSchema,
+  UpdateCustomerSchema,
 } from './adminCustomers.schema.js';
 
 // ── Customer management routes ────────────────────────────────────────────────
 
 export const adminCustomersRoutes: FastifyPluginAsync = async (app) => {
   const audience = app.requireAudience(JWT_AUDIENCE.ADMIN);
+
+  app.post('/v1/admin/customers', {
+    schema: {
+      tags: ['admin:customers'],
+      summary: 'Create a customer account',
+      description: 'Admin creates a customer directly. Either phone or email is required.',
+      security: [{ bearerAuth: [] }],
+      body: zodToJsonSchema(CreateCustomerSchema),
+    },
+    preHandler: [audience, requirePermission(AdminPermission.CUSTOMER_VIEW)],
+    handler: ctrl.createCustomer,
+  });
 
   app.get('/v1/admin/customers', {
     schema: {
@@ -61,6 +75,29 @@ export const adminCustomersRoutes: FastifyPluginAsync = async (app) => {
     },
     preHandler: [audience, requirePermission(AdminPermission.CUSTOMER_BLOCK)],
     handler: ctrl.unblockCustomer,
+  });
+
+  app.patch('/v1/admin/customers/:id', {
+    schema: {
+      tags: ['admin:customers'],
+      summary: 'Update a customer',
+      description: 'Partial update of customer profile fields.',
+      security: [{ bearerAuth: [] }],
+      body: zodToJsonSchema(UpdateCustomerSchema),
+    },
+    preHandler: [audience, requirePermission(AdminPermission.CUSTOMER_VIEW)],
+    handler: ctrl.updateCustomer,
+  });
+
+  app.delete('/v1/admin/customers/:id', {
+    schema: {
+      tags: ['admin:customers'],
+      summary: 'GDPR-delete a customer',
+      description: 'Anonymizes all PII and blocks the customer. Irreversible.',
+      security: [{ bearerAuth: [] }],
+    },
+    preHandler: [audience, requirePermission(AdminPermission.CUSTOMER_BLOCK)],
+    handler: ctrl.deleteCustomer,
   });
 
   app.post('/v1/admin/customers/:id/wallet/credit', {

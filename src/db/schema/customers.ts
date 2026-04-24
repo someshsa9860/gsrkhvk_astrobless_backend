@@ -15,6 +15,7 @@ export const customers = pgTable('customers', {
   profileImageUrl: text('profileImageUrl'),
   referralCode: text('referralCode').unique(),
   referredBy: uuid('referredBy'),
+  appleId: text('appleId').unique(), // Apple sub from Sign in with Apple
   isBlocked: boolean('isBlocked').notNull().default(false),
   blockedReason: text('blockedReason'),
   registrationCity: text('registrationCity'),

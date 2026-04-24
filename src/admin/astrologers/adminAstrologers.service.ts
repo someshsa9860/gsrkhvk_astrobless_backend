@@ -11,6 +11,8 @@ import type {
   KycDecisionInput,
   BlockAstrologerInput,
   CommissionOverrideInput,
+  CreateAstrologerInput,
+  UpdateAstrologerInput,
 } from './adminAstrologers.schema.js';
 
 // ── List ──────────────────────────────────────────────────────────────────────
@@ -138,5 +140,170 @@ export async function overrideCommission(adminId: string, astrologerId: string, 
     beforeState: { commissionPct: before.commissionPct },
     afterState: { commissionPct: input.commissionPct },
     metadata: { reason: input.reason },
+  });
+}
+
+// ── Create ────────────────────────────────────────────────────────────────────
+
+export async function createAstrologer(adminId: string, input: CreateAstrologerInput) {
+  const [created] = await db
+    .insert(astrologers)
+    .values({
+      displayName: input.displayName,
+      phone: input.phone ?? null,
+      email: input.email ?? null,
+      whatsappNumber: input.whatsappNumber ?? null,
+      legalName: input.legalName ?? null,
+      registrationCountry: input.registrationCountry ?? null,
+      panNumber: input.panNumber ?? null,
+      profileImageUrl: input.profileImageUrl ?? null,
+      dob: input.dob ?? null,
+      astroblessCategory: input.astroblessCategory ?? null,
+      primarySkill: input.primarySkill ?? null,
+      bio: input.bio ?? null,
+      languages: input.languages ?? [],
+      specialties: input.specialties ?? [],
+      experienceYears: input.experienceYears ?? 0,
+      pricePerMinChat: input.pricePerMinChat,
+      pricePerMinCall: input.pricePerMinCall,
+      pricePerMinVideo: input.pricePerMinVideo,
+      pricePerMinCallUsd: input.pricePerMinCallUsd ?? null,
+      pricePerMinVideoUsd: input.pricePerMinVideoUsd ?? null,
+      pricePerReport: input.pricePerReport ?? null,
+      pricePerReportUsd: input.pricePerReportUsd ?? null,
+      commissionPct: String(input.commissionPct ?? 30),
+      onboardingReason: input.onboardingReason ?? null,
+      interviewTime: input.interviewTime ?? null,
+      currentCity: input.currentCity ?? null,
+      otherBusinessSource: input.otherBusinessSource ?? null,
+      highestQualification: input.highestQualification ?? null,
+      degreeDiploma: input.degreeDiploma ?? null,
+      collegeUniversity: input.collegeUniversity ?? null,
+      astrologySources: input.astrologySources ?? null,
+      instagramUrl: input.instagramUrl ?? null,
+      facebookUrl: input.facebookUrl ?? null,
+      linkedinUrl: input.linkedinUrl ?? null,
+      youtubeUrl: input.youtubeUrl ?? null,
+      availability: input.availability ?? null,
+    })
+    .returning();
+
+  await writeAuditLog({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'astrologer.create',
+    targetType: 'astrologer',
+    targetId: created.id,
+    summary: `Admin created astrologer "${input.displayName}"`,
+    beforeState: null,
+    afterState: created,
+    metadata: {},
+  });
+
+  return created;
+}
+
+// ── Update ────────────────────────────────────────────────────────────────────
+
+export async function updateAstrologer(adminId: string, astrologerId: string, input: UpdateAstrologerInput) {
+  const before = await db.query.astrologers.findFirst({ where: eq(astrologers.id, astrologerId) });
+  if (!before) throw new AppError('NOT_FOUND', 'Astrologer not found.', 404);
+
+  const updates: Record<string, unknown> = { updatedAt: new Date() };
+  // Personal
+  if (input.displayName !== undefined) updates.displayName = input.displayName;
+  if (input.phone !== undefined) updates.phone = input.phone;
+  if (input.email !== undefined) updates.email = input.email;
+  if (input.whatsappNumber !== undefined) updates.whatsappNumber = input.whatsappNumber;
+  if (input.legalName !== undefined) updates.legalName = input.legalName;
+  if (input.registrationCountry !== undefined) updates.registrationCountry = input.registrationCountry;
+  if (input.panNumber !== undefined) updates.panNumber = input.panNumber;
+  if (input.aadhaarLast4 !== undefined) updates.aadhaarLast4 = input.aadhaarLast4;
+  if (input.profileImageUrl !== undefined) updates.profileImageUrl = input.profileImageUrl;
+  if (input.upiId !== undefined) updates.upiId = input.upiId;
+  // KYC docs: merge patch into existing jsonb
+  if (input.kycDocsRef !== undefined) {
+    const existing = (before.kycDocsRef ?? {}) as Record<string, unknown>;
+    updates.kycDocsRef = { ...existing, ...input.kycDocsRef };
+  }
+  // Bank: merge patch into existing jsonb
+  if (input.bankAccountRef !== undefined) {
+    const existing = (before.bankAccountRef ?? {}) as Record<string, unknown>;
+    updates.bankAccountRef = { ...existing, ...input.bankAccountRef };
+  }
+  // Skill
+  if (input.dob !== undefined) updates.dob = input.dob;
+  if (input.astroblessCategory !== undefined) updates.astroblessCategory = input.astroblessCategory;
+  if (input.primarySkill !== undefined) updates.primarySkill = input.primarySkill;
+  if (input.bio !== undefined) updates.bio = input.bio;
+  if (input.languages !== undefined) updates.languages = input.languages;
+  if (input.specialties !== undefined) updates.specialties = input.specialties;
+  if (input.experienceYears !== undefined) updates.experienceYears = input.experienceYears;
+  if (input.pricePerMinChat !== undefined) updates.pricePerMinChat = input.pricePerMinChat;
+  if (input.pricePerMinCall !== undefined) updates.pricePerMinCall = input.pricePerMinCall;
+  if (input.pricePerMinVideo !== undefined) updates.pricePerMinVideo = input.pricePerMinVideo;
+  if (input.pricePerMinCallUsd !== undefined) updates.pricePerMinCallUsd = input.pricePerMinCallUsd;
+  if (input.pricePerMinVideoUsd !== undefined) updates.pricePerMinVideoUsd = input.pricePerMinVideoUsd;
+  if (input.pricePerReport !== undefined) updates.pricePerReport = input.pricePerReport;
+  if (input.pricePerReportUsd !== undefined) updates.pricePerReportUsd = input.pricePerReportUsd;
+  // Other details
+  if (input.onboardingReason !== undefined) updates.onboardingReason = input.onboardingReason;
+  if (input.interviewTime !== undefined) updates.interviewTime = input.interviewTime;
+  if (input.currentCity !== undefined) updates.currentCity = input.currentCity;
+  if (input.otherBusinessSource !== undefined) updates.otherBusinessSource = input.otherBusinessSource;
+  if (input.highestQualification !== undefined) updates.highestQualification = input.highestQualification;
+  if (input.degreeDiploma !== undefined) updates.degreeDiploma = input.degreeDiploma;
+  if (input.collegeUniversity !== undefined) updates.collegeUniversity = input.collegeUniversity;
+  if (input.astrologySources !== undefined) updates.astrologySources = input.astrologySources;
+  // Social links
+  if (input.instagramUrl !== undefined) updates.instagramUrl = input.instagramUrl;
+  if (input.facebookUrl !== undefined) updates.facebookUrl = input.facebookUrl;
+  if (input.linkedinUrl !== undefined) updates.linkedinUrl = input.linkedinUrl;
+  if (input.youtubeUrl !== undefined) updates.youtubeUrl = input.youtubeUrl;
+  // Availability
+  if (input.availability !== undefined) updates.availability = input.availability;
+
+  const [updated] = await db
+    .update(astrologers)
+    .set(updates as Parameters<typeof db.update>[0])
+    .where(eq(astrologers.id, astrologerId))
+    .returning();
+
+  await writeAuditLog({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'astrologer.update',
+    targetType: 'astrologer',
+    targetId: astrologerId,
+    summary: `Admin updated astrologer "${before.displayName}".`,
+    beforeState: before,
+    afterState: updated,
+  });
+
+  return updated;
+}
+
+// ── Delete (soft) ─────────────────────────────────────────────────────────────
+
+export async function deleteAstrologer(adminId: string, astrologerId: string) {
+  const before = await db.query.astrologers.findFirst({ where: eq(astrologers.id, astrologerId) });
+  if (!before) throw new AppError('NOT_FOUND', 'Astrologer not found.', 404);
+
+  // Soft delete: block + mark as deleted via a convention (isBlocked = true, blockedReason = DELETED).
+  // Hard delete is intentionally not exposed through this endpoint.
+  await db
+    .update(astrologers)
+    .set({ isBlocked: true, blockedReason: 'DELETED_BY_ADMIN', isOnline: false, updatedAt: new Date() })
+    .where(eq(astrologers.id, astrologerId));
+
+  await writeAuditLog({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'astrologer.delete',
+    targetType: 'astrologer',
+    targetId: astrologerId,
+    summary: `Admin soft-deleted astrologer "${before.displayName}".`,
+    beforeState: before,
+    afterState: { isBlocked: true, blockedReason: 'DELETED_BY_ADMIN' },
   });
 }

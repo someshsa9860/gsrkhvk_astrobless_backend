@@ -29,6 +29,7 @@ import { webhookRoutes } from './modules/payments/payments.routes.js';
 import { consultationRoutes } from './modules/consultations/consultations.routes.js';
 import { contentRoutes } from './modules/content/content.routes.js';
 import { aiRoutes } from './modules/ai/ai.routes.js';
+import { kundliRoutes } from './modules/kundli/kundli.routes.js';
 import { adminPlugin } from './admin/index.js';
 import { setupScheduler } from './jobs/scheduler.js';
 import { startHoroscopeWorker } from './jobs/workers/horoscopeGeneration.worker.js';
@@ -116,6 +117,7 @@ export async function buildApp() {
   // ── Public content + AI ───────────────────────────────────────────────────
   await app.register(contentRoutes);
   await app.register(aiRoutes);
+  await app.register(kundliRoutes);
 
   // ── Admin ─────────────────────────────────────────────────────────────────
   await app.register(adminPlugin);

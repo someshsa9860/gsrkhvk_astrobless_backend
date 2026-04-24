@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, jsonb, timestamp, boolean, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, jsonb, timestamp, boolean, index, numeric, date, time } from 'drizzle-orm/pg-core';
 import { customers } from './customers';
 import { astrologers } from './astrologers';
 
@@ -71,8 +71,29 @@ export const horoscopes = pgTable('horoscopes', {
   publishedIdx: index('idx_horoscopes_published').on(t.isPublished, t.period, t.periodKey),
 }));
 
+export const kundliProfiles = pgTable('kundliProfiles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  customerId: uuid('customerId').notNull().references(() => customers.id, { onDelete: 'cascade' }),
+  label: text('label').notNull(), // "Self" | "Spouse" | child name etc.
+  birthDate: date('birthDate').notNull(),
+  birthTime: time('birthTime'), // HH:MM — null if unknown
+  birthPlace: text('birthPlace').notNull(),
+  birthLat: numeric('birthLat', { precision: 9, scale: 6 }).notNull(),
+  birthLng: numeric('birthLng', { precision: 9, scale: 6 }).notNull(),
+  timezoneOffset: numeric('timezoneOffset', { precision: 4, scale: 2 }).notNull().default('5.5'),
+  // Cached chart data returned from Vedic Astro API
+  chartData: jsonb('chartData'),
+  chartComputedAt: timestamp('chartComputedAt', { withTimezone: true }),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  customerIdx: index('idx_kundliProfiles_customerId').on(t.customerId),
+}));
+
 export type BirthChart = typeof birthCharts.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type FcmToken = typeof fcmTokens.$inferSelect;
 export type Horoscope = typeof horoscopes.$inferSelect;
 export type NewHoroscope = typeof horoscopes.$inferInsert;
+export type KundliProfile = typeof kundliProfiles.$inferSelect;
+export type NewKundliProfile = typeof kundliProfiles.$inferInsert;

@@ -34,9 +34,9 @@ export const webhookRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(401).send({ ok: false });
       }
 
-      if (event.eventType === 'paymentSucceeded' && event.providerOrderId && event.providerPaymentId && event.amountPaise) {
+      if (event.eventType === 'paymentSucceeded' && event.providerOrderId && event.providerPaymentId && event.amount) {
         try {
-          await applyTopupCredit(providerKey as PaymentProviderKey, event.providerOrderId, event.providerPaymentId, event.amountPaise);
+          await applyTopupCredit(providerKey as PaymentProviderKey, event.providerOrderId, event.providerPaymentId, event.amount);
         } catch (err) {
           await reportError({ error: err as Error, source: 'webhook', sourceDetail: `payments.${providerKey}`, metadata: { event } });
         }

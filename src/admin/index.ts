@@ -14,6 +14,7 @@ import { adminAdminsRoutes } from './admins/adminAdmins.routes.js';
 import { adminHoroscopesRoutes } from './content/adminHoroscopes.routes.js';
 import { adminImageAspectRatioRoutes } from './settings/imageAspectRatio.routes.js';
 import { adminNotificationsRoutes } from './notifications/adminNotifications.routes.js';
+import { adminRolesRoutes } from './roles/adminRoles.routes.js';
 
 const adminPluginImpl: FastifyPluginAsync = async (app) => {
   await app.register(adminDashboardRoutes);
@@ -27,6 +28,7 @@ const adminPluginImpl: FastifyPluginAsync = async (app) => {
   await app.register(adminAdminsRoutes);
   await app.register(adminHoroscopesRoutes);
   await app.register(adminNotificationsRoutes);
+  await app.register(adminRolesRoutes);
 };
 
 // Wrapped with fastify-plugin so decorators and hooks added by sub-plugins are

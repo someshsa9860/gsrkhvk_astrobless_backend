@@ -8,7 +8,7 @@ import { consultations } from '../../db/schema/consultations.js';
 import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../observability/auditLogger.js';
 import { paginationFrom, toPagedResult } from '../shared/listQuery.js';
-import type { CustomerListQuery, WalletAdjustInput } from './adminCustomers.schema.js';
+import type { CustomerListQuery, WalletAdjustInput, CreateCustomerInput, UpdateCustomerInput } from './adminCustomers.schema.js';
 import { v4 as uuidv4 } from 'uuid';
 
 // ── List ──────────────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ export async function getCustomer(id: string) {
     db
       .select({
         totalConsultations: sql<number>`count(*)`,
-        totalSpendPaise: sql<string>`coalesce(sum("totalChargedPaise"), 0)`,
+        totalSpendPaise: sql<string>`coalesce(sum("totalCharged"), 0)`,
       })
       .from(consultations)
       .where(eq(consultations.customerId, id)),
@@ -53,7 +53,7 @@ export async function getCustomer(id: string) {
 
   return {
     ...customer,
-    walletBalancePaise: wallet?.balancePaise ?? BigInt(0),
+    walletBalance: wallet?.balance ?? BigInt(0),
     totalConsultations: Number(statsResult[0]?.totalConsultations ?? 0),
     totalSpendPaise: BigInt(statsResult[0]?.totalSpendPaise ?? 0),
   };
@@ -106,13 +106,13 @@ export async function walletCredit(adminId: string, customerId: string, input: W
   const wallet = await db.query.wallets.findFirst({ where: eq(wallets.customerId, customerId) });
   if (!wallet) throw new AppError('NOT_FOUND', 'Wallet not found for this customer.', 404);
 
-  const amountBigInt = BigInt(input.amountPaise);
-  const newBalance = wallet.balancePaise + amountBigInt;
+  const amountBigInt = BigInt(input.amount);
+  const newBalance = wallet.balance + amountBigInt;
 
   await db.transaction(async (tx) => {
     await tx
       .update(wallets)
-      .set({ balancePaise: newBalance, updatedAt: new Date() })
+      .set({ balance: newBalance, updatedAt: new Date() })
       .where(eq(wallets.id, wallet.id));
 
     await tx.insert(walletTransactions).values({
@@ -120,8 +120,8 @@ export async function walletCredit(adminId: string, customerId: string, input: W
       customerId,
       type: input.type,
       direction: 'CREDIT',
-      amountPaise: amountBigInt,
-      balanceAfterPaise: newBalance,
+      amount: amountBigInt,
+      balanceAfter: newBalance,
       referenceType: 'adminCredit',
       idempotencyKey: uuidv4(),
       notes: input.reason,
@@ -134,9 +134,9 @@ export async function walletCredit(adminId: string, customerId: string, input: W
         action: 'customer.walletCredit',
         targetType: 'customer',
         targetId: customerId,
-        summary: `Admin credited ₹${input.amountPaise / 100} (${input.type}). Reason: ${input.reason}`,
-        beforeState: { balancePaise: wallet.balancePaise.toString() },
-        afterState: { balancePaise: newBalance.toString() },
+        summary: `Admin credited ₹${input.amount / 100} (${input.type}). Reason: ${input.reason}`,
+        beforeState: { balance: wallet.balance.toString() },
+        afterState: { balance: newBalance.toString() },
         metadata: { type: input.type },
       },
       tx,
@@ -144,4 +144,98 @@ export async function walletCredit(adminId: string, customerId: string, input: W
   });
 
   return { newBalancePaise: newBalance };
+}
+
+// ── Create ────────────────────────────────────────────────────────────────────
+
+export async function createCustomer(adminId: string, input: CreateCustomerInput) {
+  const [created] = await db
+    .insert(customers)
+    .values({
+      name: input.name ?? null,
+      phone: input.phone ?? null,
+      email: input.email ?? null,
+      gender: input.gender ?? null,
+      dob: input.dob ? new Date(input.dob) : null,
+    })
+    .returning();
+
+  await writeAuditLog({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'customer.create',
+    targetType: 'customer',
+    targetId: created.id,
+    summary: `Admin created customer "${input.name ?? input.email ?? input.phone}"`,
+    beforeState: null,
+    afterState: created,
+  });
+
+  return created;
+}
+
+// ── Update ────────────────────────────────────────────────────────────────────
+
+export async function updateCustomer(adminId: string, customerId: string, input: UpdateCustomerInput) {
+  const before = await db.query.customers.findFirst({ where: eq(customers.id, customerId) });
+  if (!before) throw new AppError('NOT_FOUND', 'Customer not found.', 404);
+
+  const updates: Record<string, unknown> = {};
+  if (input.name !== undefined) updates.name = input.name;
+  if (input.phone !== undefined) updates.phone = input.phone;
+  if (input.email !== undefined) updates.email = input.email;
+  if (input.gender !== undefined) updates.gender = input.gender;
+  if (input.dob !== undefined) updates.dob = input.dob ? new Date(input.dob) : null;
+
+  const [updated] = await db
+    .update(customers)
+    .set(updates as Parameters<typeof db.update>[0])
+    .where(eq(customers.id, customerId))
+    .returning();
+
+  await writeAuditLog({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'customer.update',
+    targetType: 'customer',
+    targetId: customerId,
+    summary: `Admin updated customer "${before.name ?? customerId}".`,
+    beforeState: before,
+    afterState: updated,
+  });
+
+  return updated;
+}
+
+// ── Delete (GDPR soft anonymise) ──────────────────────────────────────────────
+
+export async function deleteCustomer(adminId: string, customerId: string) {
+  const before = await db.query.customers.findFirst({ where: eq(customers.id, customerId) });
+  if (!before) throw new AppError('NOT_FOUND', 'Customer not found.', 404);
+
+  // GDPR-compliant: anonymise PII rather than hard-delete (preserves referential integrity).
+  await db
+    .update(customers)
+    .set({
+      name: null,
+      phone: null,
+      email: null,
+      gender: null,
+      dob: null,
+      profileImageUrl: null,
+      isBlocked: true,
+      blockedReason: 'GDPR_DELETED',
+    })
+    .where(eq(customers.id, customerId));
+
+  await writeAuditLog({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'customer.delete',
+    targetType: 'customer',
+    targetId: customerId,
+    summary: `Admin GDPR-deleted customer. PII anonymized.`,
+    beforeState: { name: before.name, phone: before.phone, email: before.email },
+    afterState: { name: null, phone: null, email: null, isBlocked: true },
+  });
 }

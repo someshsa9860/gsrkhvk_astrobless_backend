@@ -19,7 +19,7 @@ export async function getWallet(customerId: string): Promise<Wallet> {
 
 export async function initiateTopup(
   customerId: string,
-  amountPaise: number,
+  amount: number,
   providerKey: PaymentProviderKey,
   idempotencyKey: string,
 ): Promise<{ orderId: string; clientPayload: Record<string, unknown> }> {
@@ -35,7 +35,7 @@ export async function initiateTopup(
       const created = await repo.createPaymentOrder({
         customerId,
         providerKey,
-        amountPaise: BigInt(amountPaise),
+        amount: BigInt(amount),
         currency: DEFAULT_CURRENCY,
         status: 'created',
         idempotencyKey,
@@ -48,8 +48,8 @@ export async function initiateTopup(
         action: 'wallet.topupInitiated',
         targetType: 'paymentOrder',
         targetId: created.id,
-        summary: `Customer initiated ₹${amountPaise / 100} top-up via ${providerKey}`,
-        beforeState: { balancePaise: Number(wallet.balancePaise) },
+        summary: `Customer initiated ₹${amount / 100} top-up via ${providerKey}`,
+        beforeState: { balance: Number(wallet.balance) },
         metadata: { providerKey, idempotencyKey },
       }, tx);
 
@@ -57,7 +57,7 @@ export async function initiateTopup(
     });
 
     const provider = providerRegistry.get(providerKey);
-    const result = await provider.createOrder({ customerId, amountPaise, currency: DEFAULT_CURRENCY, idempotencyKey });
+    const result = await provider.createOrder({ customerId, amount, currency: DEFAULT_CURRENCY, idempotencyKey });
 
     await repo.updatePaymentOrder(order.id, {
       providerOrderId: result.providerOrderId,
@@ -82,7 +82,7 @@ export async function applyTopupCredit(
   providerKey: PaymentProviderKey,
   providerOrderId: string,
   providerPaymentId: string,
-  amountPaise: number,
+  amount: number,
 ): Promise<void> {
   const order = await db.query.paymentOrders.findFirst({
     where: (t, { eq }) => eq(t.providerOrderId, providerOrderId),
@@ -95,7 +95,7 @@ export async function applyTopupCredit(
     const wallet = await repo.findWalletByCustomerIdForUpdate(order.customerId, tx);
     if (!wallet) throw new AppError('NOT_FOUND', 'Wallet not found.', 404);
 
-    const newBalance = wallet.balancePaise + BigInt(amountPaise);
+    const newBalance = wallet.balance + BigInt(amount);
     await repo.updateWalletBalance(wallet.id, newBalance, tx);
 
     const txn = await repo.insertTransaction({
@@ -103,8 +103,8 @@ export async function applyTopupCredit(
       customerId: order.customerId,
       type: 'TOPUP',
       direction: 'CREDIT',
-      amountPaise: BigInt(amountPaise),
-      balanceAfterPaise: newBalance,
+      amount: BigInt(amount),
+      balanceAfter: newBalance,
       referenceType: 'paymentOrder',
       referenceId: order.id,
       idempotencyKey: `topup:${providerOrderId}`,
@@ -122,9 +122,9 @@ export async function applyTopupCredit(
       action: 'wallet.topup',
       targetType: 'wallet',
       targetId: wallet.id,
-      summary: `Wallet credited ₹${amountPaise / 100} via ${providerKey}`,
-      beforeState: { balancePaise: Number(wallet.balancePaise) },
-      afterState: { balancePaise: Number(newBalance) },
+      summary: `Wallet credited ₹${amount / 100} via ${providerKey}`,
+      beforeState: { balance: Number(wallet.balance) },
+      afterState: { balance: Number(newBalance) },
       metadata: { transactionId: txn.id },
     }, tx);
   });
@@ -134,7 +134,7 @@ export async function applyTopupCredit(
 
 export async function debitWallet(
   customerId: string,
-  amountPaise: number,
+  amount: number,
   idempotencyKey: string,
   referenceType: string,
   referenceId: string,
@@ -145,9 +145,9 @@ export async function debitWallet(
 
   const wallet = await repo.findWalletByCustomerIdForUpdate(customerId, tx);
   if (!wallet) throw new AppError('NOT_FOUND', 'Wallet not found.', 404);
-  if (wallet.balancePaise < BigInt(amountPaise)) throw new AppError('WALLET_INSUFFICIENT', 'Insufficient wallet balance.', 402);
+  if (wallet.balance < BigInt(amount)) throw new AppError('WALLET_INSUFFICIENT', 'Insufficient wallet balance.', 402);
 
-  const newBalance = wallet.balancePaise - BigInt(amountPaise);
+  const newBalance = wallet.balance - BigInt(amount);
   await repo.updateWalletBalance(wallet.id, newBalance, tx);
 
   return repo.insertTransaction({
@@ -155,8 +155,8 @@ export async function debitWallet(
     customerId,
     type: 'CONSULTATION_DEBIT',
     direction: 'DEBIT',
-    amountPaise: BigInt(amountPaise),
-    balanceAfterPaise: newBalance,
+    amount: BigInt(amount),
+    balanceAfter: newBalance,
     referenceType,
     referenceId,
     idempotencyKey,

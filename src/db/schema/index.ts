@@ -8,3 +8,4 @@ export * from './content';
 export * from './observability';
 export * from './astromall';
 export * from './adminExtras';
+export * from './appleCredentials';

@@ -88,6 +88,12 @@ async function seedAppSettings(): Promise<void> {
       description: 'Whether video call consultations are enabled (requires Agora setup)',
       category: 'feature',
     },
+    {
+      key: 'kundli.showPreBirthDasha',
+      value: false,
+      description: 'When true, Vimshottari dasha periods that ended before the native\'s birth date are included in the kundli report. When false (default), only post-birth periods are shown.',
+      category: 'kundli',
+    },
   ];
 
   for (const setting of defaults) {

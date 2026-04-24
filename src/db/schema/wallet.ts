@@ -1,11 +1,11 @@
-import { pgTable, uuid, text, bigint, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, doublePrecision, timestamp, index } from 'drizzle-orm/pg-core';
 import { customers } from './customers';
 
 export const wallets = pgTable('wallets', {
   id: uuid('id').primaryKey().defaultRandom(),
   customerId: uuid('customerId').unique().notNull().references(() => customers.id),
-  balancePaise: bigint('balancePaise', { mode: 'bigint' }).notNull().$defaultFn(() => BigInt(0)),
-  lockedPaise: bigint('lockedPaise', { mode: 'bigint' }).notNull().$defaultFn(() => BigInt(0)),
+  balance: doublePrecision('balance').notNull().default(0),
+  locked: doublePrecision('locked').notNull().default(0),
   currency: text('currency').notNull().default('INR'),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -16,8 +16,8 @@ export const walletTransactions = pgTable('walletTransactions', {
   customerId: uuid('customerId').notNull().references(() => customers.id),
   type: text('type').notNull(), // TOPUP | CONSULTATION_DEBIT | REFUND | BONUS | ADMIN_ADJUST
   direction: text('direction').notNull(), // CREDIT | DEBIT
-  amountPaise: bigint('amountPaise', { mode: 'bigint' }).notNull(),
-  balanceAfterPaise: bigint('balanceAfterPaise', { mode: 'bigint' }).notNull(),
+  amount: doublePrecision('amount').notNull(),
+  balanceAfter: doublePrecision('balanceAfter').notNull(),
   referenceType: text('referenceType'),
   referenceId: uuid('referenceId'),
   idempotencyKey: text('idempotencyKey').unique(),
@@ -34,7 +34,7 @@ export const paymentOrders = pgTable('paymentOrders', {
   providerKey: text('providerKey').notNull(),
   providerOrderId: text('providerOrderId'),
   providerPaymentId: text('providerPaymentId'),
-  amountPaise: bigint('amountPaise', { mode: 'bigint' }).notNull(),
+  amount: doublePrecision('amount').notNull(),
   currency: text('currency').notNull().default('INR'),
   status: text('status').notNull(), // created | pending | paid | failed | expired
   idempotencyKey: text('idempotencyKey').unique().notNull(),

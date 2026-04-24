@@ -7,6 +7,7 @@ import type {
   VerifyEmailOtpSchema,
   EmailLoginSchema,
   RefreshTokenSchema,
+  AppleAuthSchema,
 } from './astrologerAuth.schema.js';
 import type { z } from 'zod';
 
@@ -39,5 +40,10 @@ export async function emailLogin(req: FastifyRequest<{ Body: z.infer<typeof Emai
 
 export async function refreshToken(req: FastifyRequest<{ Body: z.infer<typeof RefreshTokenSchema> }>, reply: FastifyReply) {
   const tokens = await service.refreshTokens(req.body.refreshToken);
+  return reply.send({ ok: true, data: { ...tokens, expiresIn: 900 }, traceId: req.requestContext.traceId });
+}
+
+export async function appleAuth(req: FastifyRequest<{ Body: z.infer<typeof AppleAuthSchema> }>, reply: FastifyReply) {
+  const tokens = await service.appleAuth(req.body.identityToken, req.body.nonce, req.body.displayName);
   return reply.send({ ok: true, data: { ...tokens, expiresIn: 900 }, traceId: req.requestContext.traceId });
 }

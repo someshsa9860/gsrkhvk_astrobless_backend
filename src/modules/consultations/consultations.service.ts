@@ -24,9 +24,9 @@ export async function requestConsultation(customerId: string, input: z.infer<typ
   if (!astrologer || !astrologer.isVerified || astrologer.isBlocked) throw new AppError('NOT_FOUND', 'Astrologer not available.', 404);
   if (astrologer.isBusy) throw new AppError('ASTROLOGER_BUSY', 'Astrologer is currently busy.', 409);
 
-  const pricePerMinPaise = input.type === 'voice' ? astrologer.pricePerMinCallPaise
-    : input.type === 'video' ? astrologer.pricePerMinVideoPaise
-    : astrologer.pricePerMinChatPaise;
+  const pricePerMin = input.type === 'voice' ? astrologer.pricePerMinCall
+    : input.type === 'video' ? astrologer.pricePerMinVideo
+    : astrologer.pricePerMinChat;
 
   const consultation = await db.transaction(async (tx) => {
     const c = await repo.create({
@@ -34,7 +34,7 @@ export async function requestConsultation(customerId: string, input: z.infer<typ
       astrologerId: input.astrologerId,
       type: input.type,
       status: 'requested',
-      pricePerMinPaise,
+      pricePerMin,
       commissionPct: astrologer.commissionPct,
     }, tx);
 
@@ -54,7 +54,7 @@ export async function requestConsultation(customerId: string, input: z.infer<typ
     consultationId: consultation.id,
     customerId,
     type: input.type,
-    pricePerMinPaise,
+    pricePerMin,
   });
 
   return consultation;
@@ -103,13 +103,13 @@ export async function startConsultation(actorId: string, consultationId: string)
   startBillingTicker(
     consultationId,
     consultation.customerId,
-    consultation.pricePerMinPaise,
-    (secondsLeft, balancePaise) => {
+    consultation.pricePerMin,
+    (secondsLeft, balance) => {
       emitToSocket?.(`consultation:${consultationId}`, 'billing:lowBalance', { consultationId, secondsLeft });
       emitToSocket?.(`customer:${consultation.customerId}`, 'billing:tick', {
         consultationId,
         remainingSeconds: secondsLeft,
-        balancePaise: Number(balancePaise),
+        balance: Number(balance),
       });
     },
     async (reason) => {
@@ -134,29 +134,29 @@ export async function endConsultation(actorId: string, consultationId: string, r
   const endedAt = new Date();
   const startedAt = consultation.startedAt ?? endedAt;
   const durationSeconds = Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000);
-  const totalChargedPaise = BigInt(Math.floor(durationSeconds / 60) * consultation.pricePerMinPaise);
+  const totalCharged = BigInt(Math.floor(durationSeconds / 60) * consultation.pricePerMin);
   const commissionPct = Number(consultation.commissionPct) / 100;
-  const platformPaise = BigInt(Math.round(Number(totalChargedPaise) * commissionPct));
-  const astrologerPaise = totalChargedPaise - platformPaise;
+  const platformPaise = BigInt(Math.round(Number(totalCharged) * commissionPct));
+  const astrologerPaise = totalCharged - platformPaise;
 
   await db.transaction(async (tx) => {
     await repo.updateStatus(consultationId, {
       status: 'ended',
       endedAt,
       durationSeconds,
-      totalChargedPaise,
-      astrologerEarningPaise: astrologerPaise,
-      platformEarningPaise: platformPaise,
+      totalCharged,
+      astrologerEarning: astrologerPaise,
+      platformEarning: platformPaise,
       endReason: reason,
     }, tx);
 
     await repo.insertEarning({
       astrologerId: consultation.astrologerId,
       consultationId,
-      grossPaise: totalChargedPaise,
+      gross: totalCharged,
       commissionPct: consultation.commissionPct,
-      commissionPaise: platformPaise,
-      netPaise: astrologerPaise,
+      commission: platformPaise,
+      net: astrologerPaise,
     }, tx);
 
     await writeAuditLog({
@@ -165,8 +165,8 @@ export async function endConsultation(actorId: string, consultationId: string, r
       action: 'consultation.end',
       targetType: 'consultation',
       targetId: consultationId,
-      summary: `Consultation ended. Duration: ${durationSeconds}s, charged: ₹${Number(totalChargedPaise) / 100}`,
-      afterState: { durationSeconds, totalChargedPaise: Number(totalChargedPaise), reason },
+      summary: `Consultation ended. Duration: ${durationSeconds}s, charged: ₹${Number(totalCharged) / 100}`,
+      afterState: { durationSeconds, totalCharged: Number(totalCharged), reason },
     }, tx);
   });
 

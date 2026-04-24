@@ -24,9 +24,35 @@ export type BlockCustomerInput = z.infer<typeof BlockCustomerSchema>;
 // ── Wallet credit ─────────────────────────────────────────────────────────────
 
 export const WalletAdjustSchema = z.object({
-  amountPaise: z.number().int().positive().describe('Amount to credit in paise — must be positive integer'),
+  amount: z.number().int().positive().describe('Amount to credit in paise — must be positive integer'),
   reason: z.string().min(3).describe('Mandatory reason for audit trail'),
   type: z.enum(['GOODWILL', 'COMPENSATION', 'BONUS', 'ADMIN_ADJUST']).describe('Transaction sub-type'),
 });
 
 export type WalletAdjustInput = z.infer<typeof WalletAdjustSchema>;
+
+// ── Create customer ───────────────────────────────────────────────────────────
+
+export const CreateCustomerSchema = z
+  .object({
+    name: z.string().min(1).max(100).optional(),
+    phone: z.string().optional(),
+    email: z.string().email().optional(),
+    gender: z.enum(['male', 'female', 'other']).optional(),
+    dob: z.string().date().optional().describe('ISO date YYYY-MM-DD'),
+  })
+  .refine((d) => d.phone || d.email, { message: 'Either phone or email is required.' });
+
+export type CreateCustomerInput = z.infer<typeof CreateCustomerSchema>;
+
+// ── Update customer ───────────────────────────────────────────────────────────
+
+export const UpdateCustomerSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  phone: z.string().optional().nullable(),
+  email: z.string().email().optional().nullable(),
+  gender: z.enum(['male', 'female', 'other']).optional().nullable(),
+  dob: z.string().date().optional().nullable(),
+});
+
+export type UpdateCustomerInput = z.infer<typeof UpdateCustomerSchema>;

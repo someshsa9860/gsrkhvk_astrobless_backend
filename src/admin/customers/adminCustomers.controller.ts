@@ -2,7 +2,13 @@
 
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import * as service from './adminCustomers.service.js';
-import type { CustomerListQuery, BlockCustomerInput, WalletAdjustInput } from './adminCustomers.schema.js';
+import type {
+  CustomerListQuery,
+  BlockCustomerInput,
+  WalletAdjustInput,
+  CreateCustomerInput,
+  UpdateCustomerInput,
+} from './adminCustomers.schema.js';
 
 // ── List ──────────────────────────────────────────────────────────────────────
 
@@ -50,4 +56,22 @@ export async function walletCredit(
 ) {
   const data = await service.walletCredit(req.requestContext.actorId!, req.params.id, req.body);
   return reply.status(201).send({ ok: true, data, traceId: req.requestContext.traceId });
+}
+
+export async function createCustomer(req: FastifyRequest<{ Body: CreateCustomerInput }>, reply: FastifyReply) {
+  const data = await service.createCustomer(req.requestContext.actorId!, req.body);
+  return reply.status(201).send({ ok: true, data, traceId: req.requestContext.traceId });
+}
+
+export async function updateCustomer(
+  req: FastifyRequest<{ Params: { id: string }; Body: UpdateCustomerInput }>,
+  reply: FastifyReply,
+) {
+  const data = await service.updateCustomer(req.requestContext.actorId!, req.params.id, req.body);
+  return reply.send({ ok: true, data, traceId: req.requestContext.traceId });
+}
+
+export async function deleteCustomer(req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) {
+  await service.deleteCustomer(req.requestContext.actorId!, req.params.id);
+  return reply.send({ ok: true, data: { message: 'Customer data anonymized.' }, traceId: req.requestContext.traceId });
 }

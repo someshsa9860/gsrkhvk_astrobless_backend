@@ -15,7 +15,7 @@ export async function findWalletByCustomerIdForUpdate(customerId: string, tx: Db
 }
 
 export async function updateWalletBalance(walletId: string, newBalance: bigint, tx: DbTransaction): Promise<void> {
-  await (tx as typeof db).update(wallets).set({ balancePaise: newBalance, updatedAt: new Date() }).where(eq(wallets.id, walletId));
+  await (tx as typeof db).update(wallets).set({ balance: newBalance, updatedAt: new Date() }).where(eq(wallets.id, walletId));
 }
 
 export async function insertTransaction(data: NewWalletTransaction, tx?: DbTransaction): Promise<WalletTransaction> {

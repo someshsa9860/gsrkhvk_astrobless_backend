@@ -7,6 +7,8 @@ import type {
   KycDecisionInput,
   BlockAstrologerInput,
   CommissionOverrideInput,
+  CreateAstrologerInput,
+  UpdateAstrologerInput,
 } from './adminAstrologers.schema.js';
 
 export async function listAstrologers(
@@ -63,4 +65,28 @@ export async function overrideCommission(
     data: { message: `Commission updated to ${req.body.commissionPct}%.` },
     traceId: req.requestContext.traceId,
   });
+}
+
+export async function createAstrologer(
+  req: FastifyRequest<{ Body: CreateAstrologerInput }>,
+  reply: FastifyReply,
+) {
+  const data = await service.createAstrologer(req.requestContext.actorId!, req.body);
+  return reply.status(201).send({ ok: true, data, traceId: req.requestContext.traceId });
+}
+
+export async function updateAstrologer(
+  req: FastifyRequest<{ Params: { id: string }; Body: UpdateAstrologerInput }>,
+  reply: FastifyReply,
+) {
+  const data = await service.updateAstrologer(req.requestContext.actorId!, req.params.id, req.body);
+  return reply.send({ ok: true, data, traceId: req.requestContext.traceId });
+}
+
+export async function deleteAstrologer(
+  req: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply,
+) {
+  await service.deleteAstrologer(req.requestContext.actorId!, req.params.id);
+  return reply.send({ ok: true, data: { message: 'Astrologer removed.' }, traceId: req.requestContext.traceId });
 }

@@ -30,3 +30,9 @@ export const EmailLoginSchema = z.object({
 export const RefreshTokenSchema = z.object({
   refreshToken: z.string().min(1),
 });
+
+export const AppleAuthSchema = z.object({
+  identityToken: z.string().min(1).describe('Apple identity token from Sign in with Apple'),
+  nonce: z.string().min(1).describe('Nonce used during Apple auth flow'),
+  displayName: z.string().min(1).optional().describe('User display name (only available on first sign-in)'),
+});

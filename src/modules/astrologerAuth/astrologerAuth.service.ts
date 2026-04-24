@@ -13,7 +13,12 @@ import { writeAuditLog } from '../../observability/auditLogger.js';
 import { logger } from '../../lib/logger.js';
 import { lookupIp } from '../../lib/geoip.js';
 import { broadcastAdminEvent } from '../../admin/notifications/adminNotifications.routes.js';
+import { getContext } from '../../lib/context.js';
+import { verifyAppleToken } from '../../lib/tokenVerifier.js';
+import { upsertAppleCredential } from '../../lib/appleCredentials.js';
+import { env } from '../../config/env.js';
 import type { TokenPair } from '../../lib/jwt.js';
+import type { DeviceInfo } from '../customerAuth/customerAuth.service.js';
 
 const PERSONA = 'astrologer';
 const OTP_PHONE_TTL = 5 * 60;
@@ -28,6 +33,14 @@ export async function sendPhoneOtp(phone: string): Promise<void> {
 export async function verifyPhoneOtp(phone: string, otp: string, displayName?: string, ipAddress?: string): Promise<TokenPair> {
   await verifyAndConsumeOtp(PERSONA, 'phone', phone, otp);
   const geo = lookupIp(ipAddress);
+  const ctx = getContext();
+  const device: DeviceInfo = {
+    deviceId: ctx.deviceId,
+    deviceModel: ctx.deviceModel,
+    deviceName: ctx.deviceName,
+    osName: ctx.osName,
+    osVersion: ctx.osVersion,
+  };
 
   return db.transaction(async (tx) => {
     let astrologer = await tx.query.astrologers.findFirst({ where: eq(astrologers.phone, phone) });
@@ -38,9 +51,9 @@ export async function verifyPhoneOtp(phone: string, otp: string, displayName?: s
       [astrologer] = await tx.insert(astrologers).values({
         phone,
         displayName: displayName ?? 'Astrologer',
-        pricePerMinChatPaise: 1000,
-        pricePerMinCallPaise: 1500,
-        pricePerMinVideoPaise: 2000,
+        pricePerMinChat: 1000,
+        pricePerMinCall: 1500,
+        pricePerMinVideo: 2000,
         registrationCity: geo.city,
         registrationState: geo.state,
         registrationCountry: geo.country,
@@ -64,7 +77,7 @@ export async function verifyPhoneOtp(phone: string, otp: string, displayName?: s
       });
     }
 
-    return createSession(tx, astrologer!.id);
+    return createSession(tx, astrologer!.id, device);
   });
 }
 
@@ -85,9 +98,9 @@ export async function emailSignup(email: string, password: string, displayName: 
       emailVerified: false,
       displayName,
       phone: phone ?? null,
-      pricePerMinChatPaise: 1000,
-      pricePerMinCallPaise: 1500,
-      pricePerMinVideoPaise: 2000,
+      pricePerMinChat: 1000,
+      pricePerMinCall: 1500,
+      pricePerMinVideo: 2000,
       registrationCity: geo.city,
       registrationState: geo.state,
       registrationCountry: geo.country,
@@ -105,6 +118,14 @@ export async function emailSignup(email: string, password: string, displayName: 
 
 export async function verifyEmailOtp(email: string, otp: string): Promise<TokenPair> {
   await verifyAndConsumeOtp(PERSONA, 'email', email, otp);
+  const ctx = getContext();
+  const device: DeviceInfo = {
+    deviceId: ctx.deviceId,
+    deviceModel: ctx.deviceModel,
+    deviceName: ctx.deviceName,
+    osName: ctx.osName,
+    osVersion: ctx.osVersion,
+  };
 
   return db.transaction(async (tx) => {
     const identity = await tx.query.astrologerAuthIdentities.findFirst({
@@ -115,7 +136,7 @@ export async function verifyEmailOtp(email: string, otp: string): Promise<TokenP
     await tx.update(astrologers).set({ emailVerified: true }).where(eq(astrologers.id, identity.astrologerId));
     await writeAuditLog({ actorType: 'astrologer', actorId: identity.astrologerId, action: 'astrologer.emailVerified', summary: 'Email verified' }, tx);
 
-    return createSession(tx, identity.astrologerId);
+    return createSession(tx, identity.astrologerId, device);
   });
 }
 
@@ -134,9 +155,18 @@ export async function emailLogin(email: string, password: string): Promise<Token
 
   await db.update(astrologerAuthIdentities).set({ lastUsedAt: new Date() }).where(eq(astrologerAuthIdentities.id, identity.id));
 
+  const ctx = getContext();
+  const device: DeviceInfo = {
+    deviceId: ctx.deviceId,
+    deviceModel: ctx.deviceModel,
+    deviceName: ctx.deviceName,
+    osName: ctx.osName,
+    osVersion: ctx.osVersion,
+  };
+
   return db.transaction(async (tx) => {
     await writeAuditLog({ actorType: 'astrologer', actorId: astrologer.id, action: 'astrologer.login', summary: 'Login via email' }, tx);
-    return createSession(tx, astrologer.id);
+    return createSession(tx, astrologer.id, device);
   });
 }
 
@@ -159,15 +189,106 @@ export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
     throw new AppError('AUTH_REQUIRED', 'Session invalidated. Please log in again.', 401);
   }
 
+  const ctx = getContext();
+  const device: DeviceInfo = {
+    deviceId: ctx.deviceId,
+    deviceModel: ctx.deviceModel,
+    deviceName: ctx.deviceName,
+    osName: ctx.osName,
+    osVersion: ctx.osVersion,
+  };
+
   return db.transaction(async (tx) => {
     await tx.update(authSessions).set({ revokedAt: new Date(), revokedReason: 'rotated' }).where(eq(authSessions.id, session.id));
-    return createSession(tx, payload.sub);
+    return createSession(tx, payload.sub, device);
+  });
+}
+
+export async function appleAuth(identityToken: string, _nonce: string, displayName?: string, device?: DeviceInfo): Promise<TokenPair> {
+  const payload = await verifyAppleToken(identityToken, env.APPLE_SERVICE_ID);
+  const { sub, email } = payload;
+
+  // Upsert central credential store — preserves email/name from first sign-in
+  const storedCreds = await upsertAppleCredential(sub, email, displayName);
+  const resolvedEmail = email ?? storedCreds.email ?? undefined;
+  const resolvedDisplayName = displayName ?? storedCreds.name ?? undefined;
+
+  const ctx = getContext();
+  const resolvedDevice: DeviceInfo = device ?? {
+    deviceId: ctx.deviceId,
+    deviceModel: ctx.deviceModel,
+    deviceName: ctx.deviceName,
+    osName: ctx.osName,
+    osVersion: ctx.osVersion,
+  };
+
+  return db.transaction(async (tx) => {
+    let identity = await tx.query.astrologerAuthIdentities.findFirst({
+      where: and(eq(astrologerAuthIdentities.providerKey, 'apple'), eq(astrologerAuthIdentities.providerUserId, sub)),
+    });
+
+    let astrologerId: string;
+    let isNew = false;
+
+    if (identity) {
+      astrologerId = identity.astrologerId;
+      await tx.update(astrologerAuthIdentities).set({ lastUsedAt: new Date() }).where(eq(astrologerAuthIdentities.id, identity.id));
+    } else {
+      isNew = true;
+      let astrologer = resolvedEmail
+        ? await tx.query.astrologers.findFirst({ where: eq(astrologers.email, resolvedEmail) })
+        : undefined;
+
+      if (!astrologer) {
+        const [inserted] = await tx.insert(astrologers).values({
+          email: resolvedEmail ?? null,
+          emailVerified: resolvedEmail ? true : false,
+          displayName: resolvedDisplayName ?? 'Astrologer',
+          appleId: sub,
+          pricePerMinChat: 1000,
+          pricePerMinCall: 1500,
+          pricePerMinVideo: 2000,
+        }).returning();
+        astrologer = inserted!;
+      } else {
+        await tx.update(astrologers)
+          .set({ appleId: sub, emailVerified: true })
+          .where(eq(astrologers.id, astrologer.id));
+      }
+
+      await tx.insert(astrologerAuthIdentities).values({
+        astrologerId: astrologer.id,
+        providerKey: 'apple',
+        providerUserId: sub,
+        lastUsedAt: new Date(),
+      });
+      astrologerId = astrologer.id;
+
+      broadcastAdminEvent('event:newSignup', {
+        persona: 'astrologer',
+        id: astrologer.id,
+        name: astrologer.displayName ?? resolvedDisplayName ?? 'Astrologer',
+        method: 'apple',
+        registeredAt: new Date().toISOString(),
+      });
+    }
+
+    await writeAuditLog({
+      actorType: 'astrologer',
+      actorId: astrologerId,
+      action: isNew ? 'astrologer.signup' : 'astrologer.login',
+      targetType: 'astrologer',
+      targetId: astrologerId,
+      summary: isNew ? 'Signed up via Apple Sign-In' : 'Login via Apple Sign-In',
+    }, tx);
+
+    return createSession(tx, astrologerId, resolvedDevice);
   });
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-async function createSession(tx: Tx, subjectId: string): Promise<TokenPair> {
+async function createSession(tx: Tx, subjectId: string, device?: DeviceInfo): Promise<TokenPair> {
   const pair = await issueTokenPair(subjectId, JWT_AUDIENCE.ASTROLOGER);
   const refreshHash = pair.refreshToken ? await bcrypt.hash(pair.refreshToken, 6) : '';
 
@@ -177,6 +298,11 @@ async function createSession(tx: Tx, subjectId: string): Promise<TokenPair> {
     refreshTokenHash: refreshHash,
     sessionId: pair.sessionId,
     expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    deviceId: device?.deviceId ?? null,
+    deviceModel: device?.deviceModel ?? null,
+    deviceName: device?.deviceName ?? null,
+    osName: device?.osName ?? null,
+    osVersion: device?.osVersion ?? null,
   } as typeof authSessions.$inferInsert);
 
   return pair;

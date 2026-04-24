@@ -14,7 +14,7 @@ export class PhonePeProvider implements PaymentProvider {
     const payload = {
       merchantId: env.PHONEPE_MERCHANT_ID,
       merchantTransactionId: input.idempotencyKey.slice(0, 38),
-      amount: input.amountPaise,
+      amount: input.amount,
       redirectUrl: `${env.APP_BASE_URL}/payment/callback`,
       redirectMode: 'POST',
       paymentInstrument: { type: 'PAY_PAGE' },
@@ -65,7 +65,7 @@ export class PhonePeProvider implements PaymentProvider {
         eventType: state === 'COMPLETED' ? 'paymentSucceeded' : state === 'FAILED' ? 'paymentFailed' : 'unknown',
         providerPaymentId: data.data?.transactionId,
         providerOrderId: data.data?.merchantTransactionId,
-        amountPaise: data.data?.amount,
+        amount: data.data?.amount,
         raw: data,
       },
     };
@@ -86,7 +86,7 @@ export class PhonePeProvider implements PaymentProvider {
       return {
         eventType: data.data?.state === 'COMPLETED' ? 'paymentSucceeded' : 'paymentFailed',
         providerPaymentId: data.data?.transactionId,
-        amountPaise: data.data?.amount,
+        amount: data.data?.amount,
         raw: data,
       };
     } catch {

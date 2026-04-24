@@ -10,8 +10,8 @@ const activeTimers = new Map<string, NodeJS.Timeout>();
 export function startBillingTicker(
   consultationId: string,
   customerId: string,
-  pricePerMinPaise: number,
-  onLowBalance: (secondsLeft: number, balancePaise: bigint) => void,
+  pricePerMin: number,
+  onLowBalance: (secondsLeft: number, balance: bigint) => void,
   onAutoEnd: (reason: string) => void,
 ): void {
   if (activeTimers.has(consultationId)) return;
@@ -23,24 +23,24 @@ export function startBillingTicker(
       const idempotencyKey = `billing:${consultationId}:${Date.now()}`;
 
       await db.transaction(async (tx) => {
-        await debitWallet(customerId, pricePerMinPaise, idempotencyKey, 'consultation', consultationId, tx);
+        await debitWallet(customerId, pricePerMin, idempotencyKey, 'consultation', consultationId, tx);
       });
 
       const wallet = await db.query.wallets.findFirst({
         where: (t, { eq }) => eq(t.customerId, customerId),
-        columns: { balancePaise: true },
+        columns: { balance: true },
       });
 
       if (!wallet) return;
 
-      const remainingMinutes = Number(wallet.balancePaise) / pricePerMinPaise;
+      const remainingMinutes = Number(wallet.balance) / pricePerMin;
       const secondsLeft = Math.floor(remainingMinutes * 60);
 
       if (secondsLeft <= 60) {
-        onLowBalance(secondsLeft, wallet.balancePaise);
+        onLowBalance(secondsLeft, wallet.balance);
       }
 
-      if (wallet.balancePaise < BigInt(pricePerMinPaise)) {
+      if (wallet.balance < BigInt(pricePerMin)) {
         stopBillingTicker(consultationId);
         onAutoEnd('lowBalance');
       }

@@ -25,8 +25,8 @@ export async function updateProfile(astrologerId: string, data: z.infer<typeof U
     targetType: 'astrologer',
     targetId: astrologerId,
     summary: 'Astrologer updated profile',
-    beforeState: { displayName: before.displayName, pricePerMinChatPaise: before.pricePerMinChatPaise },
-    afterState: { displayName: updated.displayName, pricePerMinChatPaise: updated.pricePerMinChatPaise },
+    beforeState: { displayName: before.displayName, pricePerMinChat: before.pricePerMinChat },
+    afterState: { displayName: updated.displayName, pricePerMinChat: updated.pricePerMinChat },
   });
 
   return updated;
@@ -47,9 +47,9 @@ export async function searchAstrologers(params: z.infer<typeof SearchAstrologers
   return repo.search(params);
 }
 
-export async function getPublicProfile(astrologerId: string): Promise<Omit<Astrologer, 'kycDocsRef' | 'bankAccountRef' | 'commissionPct' | 'totalEarningsPaise'>> {
+export async function getPublicProfile(astrologerId: string): Promise<Omit<Astrologer, 'kycDocsRef' | 'bankAccountRef' | 'commissionPct' | 'totalEarnings'>> {
   const a = await repo.findById(astrologerId);
   if (!a || a.isBlocked || !a.isVerified) throw new AppError('NOT_FOUND', 'Astrologer not found.', 404);
-  const { kycDocsRef: _k, bankAccountRef: _b, commissionPct: _c, totalEarningsPaise: _t, ...pub } = a;
+  const { kycDocsRef: _k, bankAccountRef: _b, commissionPct: _c, totalEarnings: _t, ...pub } = a;
   return pub;
 }

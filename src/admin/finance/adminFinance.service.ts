@@ -77,7 +77,7 @@ export async function approvePayout(adminId: string, payoutId: string, input: Ap
     summary: `Payout approved. ${input.reason ? `Note: ${input.reason}` : ''}`,
     beforeState: { status: payout.status },
     afterState: { status: 'processing' },
-    metadata: { amountPaise: payout.amountPaise.toString() },
+    metadata: { amount: payout.amount.toString() },
   });
 
   return { payoutId, status: 'processing' };

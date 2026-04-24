@@ -8,6 +8,11 @@ export const authSessions = pgTable('authSessions', {
   refreshTokenHash: text('refreshTokenHash').notNull(),
   userAgent: text('userAgent'),
   ipAddress: text('ipAddress'),
+  deviceId: text('deviceId'),      // unique device identifier from Flutter (X-Device-Id header)
+  deviceModel: text('deviceModel'), // e.g. "iPhone 14 Pro"
+  deviceName: text('deviceName'),   // user's device name
+  osName: text('osName'),           // "iOS" | "Android" | "web"
+  osVersion: text('osVersion'),     // "17.0", "14"
   issuedAt: timestamp('issuedAt', { withTimezone: true }).notNull().defaultNow(),
   expiresAt: timestamp('expiresAt', { withTimezone: true }).notNull(),
   revokedAt: timestamp('revokedAt', { withTimezone: true }),

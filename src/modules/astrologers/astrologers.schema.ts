@@ -7,9 +7,9 @@ export const UpdateAstrologerProfileSchema = z.object({
   languages: z.array(z.string()).optional(),
   specialties: z.array(z.string()).optional(),
   experienceYears: z.number().int().min(0).optional(),
-  pricePerMinChatPaise: z.number().int().min(100).optional(),
-  pricePerMinCallPaise: z.number().int().min(100).optional(),
-  pricePerMinVideoPaise: z.number().int().min(100).optional(),
+  pricePerMinChat: z.number().int().min(100).optional(),
+  pricePerMinCall: z.number().int().min(100).optional(),
+  pricePerMinVideo: z.number().int().min(100).optional(),
 });
 
 export const SearchAstrologersQuerySchema = z.object({

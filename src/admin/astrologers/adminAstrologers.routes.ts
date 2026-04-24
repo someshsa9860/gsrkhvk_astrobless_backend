@@ -10,6 +10,8 @@ import {
   KycDecisionSchema,
   BlockAstrologerSchema,
   CommissionOverrideSchema,
+  CreateAstrologerSchema,
+  UpdateAstrologerSchema,
 } from './adminAstrologers.schema.js';
 
 // ── Astrologer management routes ──────────────────────────────────────────────
@@ -27,6 +29,18 @@ export const adminAstrologersRoutes: FastifyPluginAsync = async (app) => {
     },
     preHandler: [audience, requirePermission(AdminPermission.ASTROLOGER_VIEW)],
     handler: ctrl.listAstrologers,
+  });
+
+  app.post('/v1/admin/astrologers', {
+    schema: {
+      tags: ['admin:astrologers'],
+      summary: 'Create an astrologer account',
+      description: 'Admin creates an astrologer profile directly. Either phone or email is required.',
+      security: [{ bearerAuth: [] }],
+      body: zodToJsonSchema(CreateAstrologerSchema),
+    },
+    preHandler: [audience, requirePermission(AdminPermission.ASTROLOGER_EDIT)],
+    handler: ctrl.createAstrologer,
   });
 
   app.get('/v1/admin/astrologers/:id', {
@@ -73,6 +87,29 @@ export const adminAstrologersRoutes: FastifyPluginAsync = async (app) => {
     },
     preHandler: [audience, requirePermission(AdminPermission.ASTROLOGER_BLOCK)],
     handler: ctrl.unblockAstrologer,
+  });
+
+  app.patch('/v1/admin/astrologers/:id', {
+    schema: {
+      tags: ['admin:astrologers'],
+      summary: 'Update astrologer profile fields',
+      description: 'Partial update of any editable astrologer fields. All fields are optional.',
+      security: [{ bearerAuth: [] }],
+      body: zodToJsonSchema(UpdateAstrologerSchema),
+    },
+    preHandler: [audience, requirePermission(AdminPermission.ASTROLOGER_EDIT)],
+    handler: ctrl.updateAstrologer,
+  });
+
+  app.delete('/v1/admin/astrologers/:id', {
+    schema: {
+      tags: ['admin:astrologers'],
+      summary: 'Soft-delete an astrologer',
+      description: 'Blocks the astrologer and marks them as deleted. Not reversible via normal flows.',
+      security: [{ bearerAuth: [] }],
+    },
+    preHandler: [audience, requirePermission(AdminPermission.ASTROLOGER_EDIT)],
+    handler: ctrl.deleteAstrologer,
   });
 
   app.post('/v1/admin/astrologers/:id/commission', {

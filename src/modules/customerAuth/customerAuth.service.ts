@@ -14,7 +14,19 @@ import { writeAuditLog } from '../../observability/auditLogger.js';
 import { logger } from '../../lib/logger.js';
 import { lookupIp } from '../../lib/geoip.js';
 import { broadcastAdminEvent } from '../../admin/notifications/adminNotifications.routes.js';
+import { getContext } from '../../lib/context.js';
+import { verifyGoogleToken, verifyAppleToken } from '../../lib/tokenVerifier.js';
+import { upsertAppleCredential } from '../../lib/appleCredentials.js';
+import { env } from '../../config/env.js';
 import type { TokenPair } from '../../lib/jwt.js';
+
+export interface DeviceInfo {
+  deviceId?: string;
+  deviceModel?: string;
+  deviceName?: string;
+  osName?: string;
+  osVersion?: string;
+}
 
 const PERSONA = 'customer';
 const OTP_PHONE_TTL = 5 * 60;
@@ -30,6 +42,14 @@ export async function sendPhoneOtp(phone: string): Promise<void> {
 export async function verifyPhoneOtp(phone: string, otp: string, name?: string, ipAddress?: string): Promise<TokenPair> {
   await verifyAndConsumeOtp(PERSONA, 'phone', phone, otp);
   const geo = lookupIp(ipAddress);
+  const ctx = getContext();
+  const device: DeviceInfo = {
+    deviceId: ctx.deviceId,
+    deviceModel: ctx.deviceModel,
+    deviceName: ctx.deviceName,
+    osName: ctx.osName,
+    osVersion: ctx.osVersion,
+  };
 
   return db.transaction(async (tx) => {
     let customer = await tx.query.customers.findFirst({ where: eq(customers.phone, phone) });
@@ -49,7 +69,7 @@ export async function verifyPhoneOtp(phone: string, otp: string, name?: string, 
       await tx.insert(wallets).values({ customerId: customer!.id });
     }
 
-    const session = await createSession(tx, customer!.id, 'customer');
+    const session = await createSession(tx, customer!.id, 'customer', device);
     await writeAuditLog({
       actorType: 'customer', actorId: customer!.id, action: isNew ? 'customer.signup' : 'customer.login',
       targetType: 'customer', targetId: customer!.id, summary: isNew ? 'Signed up via phone OTP' : 'Login via phone OTP',
@@ -106,6 +126,14 @@ export async function emailSignup(email: string, password: string, name: string,
 
 export async function verifyEmailOtp(email: string, otp: string): Promise<TokenPair> {
   await verifyAndConsumeOtp(PERSONA, 'email', email, otp);
+  const ctx = getContext();
+  const device: DeviceInfo = {
+    deviceId: ctx.deviceId,
+    deviceModel: ctx.deviceModel,
+    deviceName: ctx.deviceName,
+    osName: ctx.osName,
+    osVersion: ctx.osVersion,
+  };
 
   return db.transaction(async (tx) => {
     const identity = await tx.query.customerAuthIdentities.findFirst({
@@ -116,7 +144,7 @@ export async function verifyEmailOtp(email: string, otp: string): Promise<TokenP
     await tx.update(customers).set({ emailVerified: true }).where(eq(customers.id, identity.customerId));
     await writeAuditLog({ actorType: 'customer', actorId: identity.customerId, action: 'customer.emailVerified', summary: 'Email verified' }, tx);
 
-    return createSession(tx, identity.customerId, 'customer');
+    return createSession(tx, identity.customerId, 'customer', device);
   });
 }
 
@@ -135,20 +163,180 @@ export async function emailLogin(email: string, password: string): Promise<Token
 
   await db.update(customerAuthIdentities).set({ lastUsedAt: new Date() }).where(eq(customerAuthIdentities.id, identity.id));
 
+  const ctx = getContext();
+  const device: DeviceInfo = {
+    deviceId: ctx.deviceId,
+    deviceModel: ctx.deviceModel,
+    deviceName: ctx.deviceName,
+    osName: ctx.osName,
+    osVersion: ctx.osVersion,
+  };
+
   return db.transaction(async (tx) => {
     await writeAuditLog({ actorType: 'customer', actorId: customer.id, action: 'customer.login', summary: 'Login via email' }, tx);
-    return createSession(tx, customer.id, 'customer');
+    return createSession(tx, customer.id, 'customer', device);
   });
 }
 
-export async function googleAuth(idToken: string): Promise<TokenPair> {
-  // TODO: verify idToken against Google JWKS, extract sub/email/name/picture
-  throw new AppError('INTERNAL', 'Google auth not yet configured', 501);
+export async function googleAuth(idToken: string, device?: DeviceInfo): Promise<TokenPair> {
+  const payload = await verifyGoogleToken(idToken, env.GOOGLE_OAUTH_CLIENT_ID);
+  const { sub, email, name, picture } = payload;
+
+  const ctx = getContext();
+  const resolvedDevice: DeviceInfo = device ?? {
+    deviceId: ctx.deviceId,
+    deviceModel: ctx.deviceModel,
+    deviceName: ctx.deviceName,
+    osName: ctx.osName,
+    osVersion: ctx.osVersion,
+  };
+
+  return db.transaction(async (tx) => {
+    // Look up existing identity for this Google sub
+    let identity = await tx.query.customerAuthIdentities.findFirst({
+      where: and(eq(customerAuthIdentities.providerKey, 'google'), eq(customerAuthIdentities.providerUserId, sub)),
+    });
+
+    let customerId: string;
+    let isNew = false;
+
+    if (identity) {
+      customerId = identity.customerId;
+      await tx.update(customerAuthIdentities).set({ lastUsedAt: new Date() }).where(eq(customerAuthIdentities.id, identity.id));
+    } else {
+      isNew = true;
+      // Upsert customer by email if one already exists (e.g. email+password account)
+      let customer = email
+        ? await tx.query.customers.findFirst({ where: eq(customers.email, email) })
+        : undefined;
+
+      if (!customer) {
+        const [inserted] = await tx.insert(customers).values({
+          email: email ?? null,
+          emailVerified: true,
+          name: name ?? null,
+          profileImageUrl: picture ?? null,
+          referralCode: uuidv4().slice(0, 8).toUpperCase(),
+        }).returning();
+        customer = inserted!;
+        await tx.insert(wallets).values({ customerId: customer.id });
+      } else {
+        // Link Google to existing account
+        if (!customer.emailVerified) {
+          await tx.update(customers).set({ emailVerified: true }).where(eq(customers.id, customer.id));
+        }
+      }
+
+      await tx.insert(customerAuthIdentities).values({
+        customerId: customer.id,
+        providerKey: 'google',
+        providerUserId: sub,
+        lastUsedAt: new Date(),
+      });
+      customerId = customer.id;
+
+      broadcastAdminEvent('event:newSignup', {
+        persona: 'customer',
+        id: customer.id,
+        name: customer.name ?? name ?? 'New User',
+        method: 'google',
+        registeredAt: new Date().toISOString(),
+      });
+    }
+
+    await writeAuditLog({
+      actorType: 'customer',
+      actorId: customerId,
+      action: isNew ? 'customer.signup' : 'customer.login',
+      targetType: 'customer',
+      targetId: customerId,
+      summary: isNew ? 'Signed up via Google' : 'Login via Google',
+    }, tx);
+
+    return createSession(tx, customerId, 'customer', resolvedDevice);
+  });
 }
 
-export async function appleAuth(identityToken: string, nonce: string, name?: string): Promise<TokenPair> {
-  // TODO: verify identityToken against Apple JWKS
-  throw new AppError('INTERNAL', 'Apple auth not yet configured', 501);
+export async function appleAuth(identityToken: string, _nonce: string, name?: string, device?: DeviceInfo): Promise<TokenPair> {
+  const payload = await verifyAppleToken(identityToken, env.APPLE_SERVICE_ID);
+  const { sub, email } = payload;
+
+  // Upsert central credential store — preserves email/name from first sign-in
+  // since Apple stops returning them on subsequent sign-ins
+  const storedCreds = await upsertAppleCredential(sub, email, name);
+  const resolvedEmail = email ?? storedCreds.email ?? undefined;
+  const resolvedName = name ?? storedCreds.name ?? undefined;
+
+  const ctx = getContext();
+  const resolvedDevice: DeviceInfo = device ?? {
+    deviceId: ctx.deviceId,
+    deviceModel: ctx.deviceModel,
+    deviceName: ctx.deviceName,
+    osName: ctx.osName,
+    osVersion: ctx.osVersion,
+  };
+
+  return db.transaction(async (tx) => {
+    let identity = await tx.query.customerAuthIdentities.findFirst({
+      where: and(eq(customerAuthIdentities.providerKey, 'apple'), eq(customerAuthIdentities.providerUserId, sub)),
+    });
+
+    let customerId: string;
+    let isNew = false;
+
+    if (identity) {
+      customerId = identity.customerId;
+      await tx.update(customerAuthIdentities).set({ lastUsedAt: new Date() }).where(eq(customerAuthIdentities.id, identity.id));
+    } else {
+      isNew = true;
+      let customer = resolvedEmail
+        ? await tx.query.customers.findFirst({ where: eq(customers.email, resolvedEmail) })
+        : undefined;
+
+      if (!customer) {
+        const [inserted] = await tx.insert(customers).values({
+          email: resolvedEmail ?? null,
+          emailVerified: resolvedEmail ? true : false,
+          name: resolvedName ?? null,
+          appleId: sub,
+          referralCode: uuidv4().slice(0, 8).toUpperCase(),
+        }).returning();
+        customer = inserted!;
+        await tx.insert(wallets).values({ customerId: customer.id });
+      } else {
+        await tx.update(customers)
+          .set({ appleId: sub, emailVerified: true })
+          .where(eq(customers.id, customer.id));
+      }
+
+      await tx.insert(customerAuthIdentities).values({
+        customerId: customer.id,
+        providerKey: 'apple',
+        providerUserId: sub,
+        lastUsedAt: new Date(),
+      });
+      customerId = customer.id;
+
+      broadcastAdminEvent('event:newSignup', {
+        persona: 'customer',
+        id: customer.id,
+        name: customer.name ?? resolvedName ?? 'New User',
+        method: 'apple',
+        registeredAt: new Date().toISOString(),
+      });
+    }
+
+    await writeAuditLog({
+      actorType: 'customer',
+      actorId: customerId,
+      action: isNew ? 'customer.signup' : 'customer.login',
+      targetType: 'customer',
+      targetId: customerId,
+      summary: isNew ? 'Signed up via Apple Sign-In' : 'Login via Apple Sign-In',
+    }, tx);
+
+    return createSession(tx, customerId, 'customer', resolvedDevice);
+  });
 }
 
 export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
@@ -161,7 +349,7 @@ export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
     throw new AppError('AUTH_REQUIRED', 'Invalid refresh token.', 401);
   }
 
-  const hashedIncoming = await bcrypt.hash(refreshToken, 1); // just check existence
+  void bcrypt.hash(refreshToken, 1); // just check existence — suppress unused var warning
   const session = await db.query.authSessions.findFirst({
     where: and(eq(authSessions.subjectId, payload.sub), eq(authSessions.audience, 'customer')),
   });
@@ -174,9 +362,18 @@ export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
     throw new AppError('AUTH_REQUIRED', 'Session invalidated. Please log in again.', 401);
   }
 
+  const ctx = getContext();
+  const device: DeviceInfo = {
+    deviceId: ctx.deviceId,
+    deviceModel: ctx.deviceModel,
+    deviceName: ctx.deviceName,
+    osName: ctx.osName,
+    osVersion: ctx.osVersion,
+  };
+
   return db.transaction(async (tx) => {
     await tx.update(authSessions).set({ revokedAt: new Date(), revokedReason: 'rotated' }).where(eq(authSessions.id, session.id));
-    return createSession(tx, payload.sub, 'customer');
+    return createSession(tx, payload.sub, 'customer', device);
   });
 }
 
@@ -190,7 +387,12 @@ export async function logout(sessionId: string, subjectId: string): Promise<void
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-async function createSession(tx: Tx, subjectId: string, persona: 'customer'): Promise<TokenPair> {
+async function createSession(
+  tx: Tx,
+  subjectId: string,
+  persona: 'customer',
+  device?: DeviceInfo,
+): Promise<TokenPair> {
   const pair = await issueTokenPair(subjectId, JWT_AUDIENCE.CUSTOMER);
 
   const refreshHash = pair.refreshToken
@@ -203,6 +405,11 @@ async function createSession(tx: Tx, subjectId: string, persona: 'customer'): Pr
     refreshTokenHash: refreshHash,
     sessionId: pair.sessionId,
     expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    deviceId: device?.deviceId ?? null,
+    deviceModel: device?.deviceModel ?? null,
+    deviceName: device?.deviceName ?? null,
+    osName: device?.osName ?? null,
+    osVersion: device?.osVersion ?? null,
   } as typeof authSessions.$inferInsert);
 
   return pair;

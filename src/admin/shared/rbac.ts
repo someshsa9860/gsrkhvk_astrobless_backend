@@ -4,6 +4,7 @@
 import type { preHandlerHookHandler } from 'fastify';
 import { db } from '../../db/client.js';
 import { admins } from '../../db/schema/admins.js';
+import { adminCustomRoles } from '../../db/schema/adminExtras.js';
 import { eq } from 'drizzle-orm';
 import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../observability/auditLogger.js';
@@ -44,6 +45,7 @@ export enum AdminPermission {
   ERROR_VIEW = 'error.view',
   ERROR_RESOLVE = 'error.resolve',
   ADMIN_MANAGE = 'admin.manage',
+  ROLE_MANAGE = 'role.manage',
   EXPORT_REQUEST = 'export.request',
 }
 
@@ -55,7 +57,7 @@ const ALL_PERMISSIONS = Object.values(AdminPermission);
 
 // Map each role to its granted permissions.
 export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
-  superAdmin: ALL_PERMISSIONS,
+  superAdmin: [...ALL_PERMISSIONS],
   ops: [
     AdminPermission.DASHBOARD_VIEW,
     AdminPermission.ASTROLOGER_VIEW, AdminPermission.ASTROLOGER_KYC_REVIEW,
@@ -112,7 +114,14 @@ async function resolveAdminPermissions(adminId: string): Promise<{ role: AdminRo
     throw new AppError('FORBIDDEN', 'Admin account not found or inactive.', 403);
   }
   const role = admin.role as AdminRole;
-  const base = ROLE_PERMISSIONS[role] ?? [];
+  let base: string[] = ROLE_PERMISSIONS[role] ?? [];
+  // For non-built-in role slugs, look up the custom role's permissions from DB.
+  if (!ADMIN_ROLES.includes(role)) {
+    const customRole = await db.query.adminCustomRoles.findFirst({
+      where: eq(adminCustomRoles.slug, role),
+    });
+    base = customRole?.permissions ?? [];
+  }
   const custom = (admin.customPermissions ?? []) as string[];
   const effectivePerms = new Set<string>([...base, ...custom]);
   return { role, effectivePerms };

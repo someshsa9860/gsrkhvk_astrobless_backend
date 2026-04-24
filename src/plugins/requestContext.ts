@@ -13,6 +13,11 @@ const requestContextPlugin: FastifyPluginAsync = async (app) => {
       userAgent: req.headers['user-agent'],
       appVersion: req.headers['x-app-version'] as string | undefined,
       platform: req.headers['x-platform'] as string | undefined,
+      deviceId: req.headers['x-device-id'] as string | undefined,
+      deviceModel: req.headers['x-device-model'] as string | undefined,
+      deviceName: req.headers['x-device-name'] as string | undefined,
+      osName: req.headers['x-os-name'] as string | undefined,
+      osVersion: req.headers['x-os-version'] as string | undefined,
     };
 
     req.requestContext = ctx;
