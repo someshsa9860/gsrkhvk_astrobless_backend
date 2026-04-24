@@ -59,10 +59,10 @@ export const astrologerEarnings = pgTable('astrologerEarnings', {
   id: uuid('id').primaryKey().defaultRandom(),
   astrologerId: uuid('astrologerId').notNull().references(() => astrologers.id),
   consultationId: uuid('consultationId').notNull().references(() => consultations.id),
-  gross: bigint('gross', { mode: 'bigint' }).notNull(),
+  gross: doublePrecision('gross').notNull(),
   commissionPct: numeric('commissionPct', { precision: 5, scale: 2 }).notNull(),
-  commission: bigint('commission', { mode: 'bigint' }).notNull(),
-  net: bigint('net', { mode: 'bigint' }).notNull(),
+  commission: doublePrecision('commission').notNull(),
+  net: doublePrecision('net').notNull(),
   settledPayoutId: uuid('settledPayoutId'),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
 });
