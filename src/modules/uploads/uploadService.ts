@@ -1,4 +1,4 @@
-import { getStorage, type ImageVariants, type ImageCategory } from '../../lib/storage/index.js';
+import { getStorage, type ImageVariantKeys, type ImageCategory } from '../../lib/storage/index.js';
 import {
   processImage,
   buildKey,
@@ -23,7 +23,8 @@ export interface UploadImageInput {
 }
 
 export interface UploadImageResult {
-  variants: ImageVariants;
+  /** Storage keys for each variant — save these to DB, never the URLs */
+  keys: ImageVariantKeys;
   /** The storage key prefix for this entity's images */
   prefix: string;
 }
@@ -47,7 +48,7 @@ export async function resolveAspectRatio(
 
 /**
  * Upload an image, generate sm/md/lg WebP variants, and store all four files.
- * Returns the public URLs for all variants.
+ * Returns storage KEYS (not URLs) — callers must resolve keys to URLs at read time.
  */
 export async function uploadImage(input: UploadImageInput): Promise<UploadImageResult> {
   const { buffer, mimeType, category, entityId, subFolder, aspectRatio } = input;
@@ -73,10 +74,11 @@ export async function uploadImage(input: UploadImageInput): Promise<UploadImageR
     ),
   );
 
-  const byVariant = Object.fromEntries(uploads.map((u, i) => [processed[i].variant, u.url]));
+  // Store keys, not URLs — URLs are generated at read time via storage.publicUrl(key)
+  const byVariant = Object.fromEntries(uploads.map((u, i) => [processed[i].variant, u.key]));
 
   return {
-    variants: {
+    keys: {
       original: byVariant['original'],
       sm: byVariant['sm'],
       md: byVariant['md'],

@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { db } from '../../db/client.js';
+import { prisma } from '../../db/client.js';
 import * as repo from './wallet.repository.js';
 import { providerRegistry } from '../payments/providers/providerRegistry.js';
 import { walletTopupTotal } from '../../lib/metrics.js';
@@ -8,7 +8,7 @@ import { writeAuditLog } from '../../observability/auditLogger.js';
 import { reportError } from '../../observability/errorReporter.js';
 import { DEFAULT_CURRENCY } from '../../config/constants.js';
 import { PaymentProviderCapability, type PaymentProviderKey } from '../payments/payments.types.js';
-import type { Wallet, WalletTransaction, PaymentOrder } from '../../db/schema/wallet.js';
+import type { Wallet, WalletTransaction } from '@prisma/client';
 import { tracer } from '../../lib/tracing.js';
 
 export async function getWallet(customerId: string): Promise<Wallet> {
@@ -31,11 +31,11 @@ export async function initiateTopup(
     const wallet = await repo.findWalletByCustomerId(customerId);
     if (!wallet) throw new AppError('NOT_FOUND', 'Wallet not found.', 404);
 
-    const order = await db.transaction(async (tx) => {
+    const order = await prisma.$transaction(async (tx) => {
       const created = await repo.createPaymentOrder({
         customerId,
         providerKey,
-        amount: BigInt(amount),
+        amount,
         currency: DEFAULT_CURRENCY,
         status: 'created',
         idempotencyKey,
@@ -48,8 +48,8 @@ export async function initiateTopup(
         action: 'wallet.topupInitiated',
         targetType: 'paymentOrder',
         targetId: created.id,
-        summary: `Customer initiated ₹${amount / 100} top-up via ${providerKey}`,
-        beforeState: { balance: Number(wallet.balance) },
+        summary: `Customer initiated top-up of ${amount} via ${providerKey}`,
+        beforeState: { balance: wallet.balance },
         metadata: { providerKey, idempotencyKey },
       }, tx);
 
@@ -84,18 +84,16 @@ export async function applyTopupCredit(
   providerPaymentId: string,
   amount: number,
 ): Promise<void> {
-  const order = await db.query.paymentOrders.findFirst({
-    where: (t, { eq }) => eq(t.providerOrderId, providerOrderId),
-  });
+  const order = await prisma.paymentOrder.findFirst({ where: { providerOrderId } });
 
-  if (!order) return; // unknown order — log and ignore
-  if (order.status === 'paid') return; // idempotent
+  if (!order) return;
+  if (order.status === 'paid') return;
 
-  await db.transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     const wallet = await repo.findWalletByCustomerIdForUpdate(order.customerId, tx);
     if (!wallet) throw new AppError('NOT_FOUND', 'Wallet not found.', 404);
 
-    const newBalance = wallet.balance + BigInt(amount);
+    const newBalance = wallet.balance + amount;
     await repo.updateWalletBalance(wallet.id, newBalance, tx);
 
     const txn = await repo.insertTransaction({
@@ -103,7 +101,7 @@ export async function applyTopupCredit(
       customerId: order.customerId,
       type: 'TOPUP',
       direction: 'CREDIT',
-      amount: BigInt(amount),
+      amount,
       balanceAfter: newBalance,
       referenceType: 'paymentOrder',
       referenceId: order.id,
@@ -122,9 +120,9 @@ export async function applyTopupCredit(
       action: 'wallet.topup',
       targetType: 'wallet',
       targetId: wallet.id,
-      summary: `Wallet credited ₹${amount / 100} via ${providerKey}`,
-      beforeState: { balance: Number(wallet.balance) },
-      afterState: { balance: Number(newBalance) },
+      summary: `Wallet credited ${amount} via ${providerKey}`,
+      beforeState: { balance: wallet.balance },
+      afterState: { balance: newBalance },
       metadata: { transactionId: txn.id },
     }, tx);
   });
@@ -138,16 +136,16 @@ export async function debitWallet(
   idempotencyKey: string,
   referenceType: string,
   referenceId: string,
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
 ): Promise<WalletTransaction> {
   const existing = await repo.findTransactionByIdempotencyKey(idempotencyKey);
   if (existing) return existing;
 
   const wallet = await repo.findWalletByCustomerIdForUpdate(customerId, tx);
   if (!wallet) throw new AppError('NOT_FOUND', 'Wallet not found.', 404);
-  if (wallet.balance < BigInt(amount)) throw new AppError('WALLET_INSUFFICIENT', 'Insufficient wallet balance.', 402);
+  if (wallet.balance < amount) throw new AppError('WALLET_INSUFFICIENT', 'Insufficient wallet balance.', 402);
 
-  const newBalance = wallet.balance - BigInt(amount);
+  const newBalance = wallet.balance - amount;
   await repo.updateWalletBalance(wallet.id, newBalance, tx);
 
   return repo.insertTransaction({
@@ -155,7 +153,7 @@ export async function debitWallet(
     customerId,
     type: 'CONSULTATION_DEBIT',
     direction: 'DEBIT',
-    amount: BigInt(amount),
+    amount,
     balanceAfter: newBalance,
     referenceType,
     referenceId,

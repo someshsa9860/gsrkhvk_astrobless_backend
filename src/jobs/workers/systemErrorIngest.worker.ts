@@ -1,8 +1,6 @@
 import { Worker } from 'bullmq';
-import { eq, sql } from 'drizzle-orm';
 import { redis } from '../../lib/redis.js';
-import { db } from '../../db/client.js';
-import { systemErrors } from '../../db/schema/observability.js';
+import { prisma } from '../../db/client.js';
 import { logger } from '../../lib/logger.js';
 
 export function startSystemErrorWorker(): Worker {
@@ -30,43 +28,46 @@ export function startSystemErrorWorker(): Worker {
       sentryEventId?: string;
     };
 
-    const existing = await db.query.systemErrors.findFirst({
-      where: eq(systemErrors.fingerprint, data.fingerprint),
-      columns: { id: true, isResolved: true },
+    const existing = await prisma.systemError.findFirst({
+      where: { fingerprint: data.fingerprint },
+      select: { id: true, isResolved: true },
     });
 
     if (existing) {
-      await db.update(systemErrors)
-        .set({
-          occurrenceCount: sql`${systemErrors.occurrenceCount} + 1`,
+      await prisma.systemError.update({
+        where: { id: existing.id },
+        data: {
+          occurrenceCount: { increment: 1 },
           lastSeenAt: new Date(),
-          isResolved: false, // reopen if previously resolved
-        })
-        .where(eq(systemErrors.id, existing.id));
+          isResolved: false,
+        },
+      });
     } else {
-      await db.insert(systemErrors).values({
-        traceId: data.traceId,
-        errorName: data.errorName,
-        errorMessage: data.errorMessage,
-        stackTrace: data.stackTrace,
-        severity: data.severity,
-        source: data.source,
-        sourceDetail: data.sourceDetail,
-        audience: data.audience,
-        actorType: data.actorType,
-        actorId: data.actorId,
-        httpMethod: data.httpMethod,
-        httpPath: data.httpPath,
-        httpStatusCode: data.httpStatusCode,
-        serverHostname: data.serverHostname,
-        serverRegion: data.serverRegion,
-        appVersion: data.appVersion,
-        environment: data.environment,
-        metadata: data.metadata ?? null,
-        fingerprint: data.fingerprint,
-        sentryEventId: data.sentryEventId,
-        firstSeenAt: new Date(),
-        lastSeenAt: new Date(),
+      await prisma.systemError.create({
+        data: {
+          traceId: data.traceId ?? null,
+          errorName: data.errorName,
+          errorMessage: data.errorMessage,
+          stackTrace: data.stackTrace ?? null,
+          severity: data.severity,
+          source: data.source,
+          sourceDetail: data.sourceDetail ?? null,
+          audience: data.audience ?? null,
+          actorType: data.actorType ?? null,
+          actorId: data.actorId ?? null,
+          httpMethod: data.httpMethod ?? null,
+          httpPath: data.httpPath ?? null,
+          httpStatusCode: data.httpStatusCode ?? null,
+          serverHostname: data.serverHostname ?? null,
+          serverRegion: data.serverRegion ?? null,
+          appVersion: data.appVersion ?? null,
+          environment: data.environment,
+          metadata: data.metadata ?? undefined,
+          fingerprint: data.fingerprint,
+          sentryEventId: data.sentryEventId ?? null,
+          firstSeenAt: new Date(),
+          lastSeenAt: new Date(),
+        },
       });
     }
   }, { connection: redis });

@@ -1,5 +1,6 @@
 import fp from 'fastify-plugin';
 import type { FastifyPluginAsync } from 'fastify';
+import { Prisma } from '@prisma/client';
 import { AppError, isAppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 
@@ -24,6 +25,19 @@ const errorHandlerPlugin: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({
         ok: false,
         error: { code: 'VALIDATION', message: 'Request validation failed', details: { errors: error.validation } },
+        traceId,
+      });
+    }
+
+    // Prisma unique constraint violation → 409
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      const fields = (error.meta?.['target'] as string[] | undefined) ??
+        ((error.meta?.['driverAdapterError'] as { cause?: { constraint?: { fields?: string[] } } } | undefined)
+          ?.cause?.constraint?.fields ?? []);
+      const fieldList = fields.join(', ');
+      return reply.status(409).send({
+        ok: false,
+        error: { code: 'CONFLICT', message: `A record with this ${fieldList || 'value'} already exists.` },
         traceId,
       });
     }

@@ -1,7 +1,7 @@
 import * as repo from './customers.repository.js';
 import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../observability/auditLogger.js';
-import type { Customer } from '../../db/schema/customers.js';
+import type { Customer } from '@prisma/client';
 import type { z } from 'zod';
 import type { UpdateProfileSchema } from './customers.schema.js';
 

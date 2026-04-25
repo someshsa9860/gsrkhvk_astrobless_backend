@@ -2,10 +2,8 @@
 // Register crons once at app startup; they are idempotent (BullMQ deduplicates by name).
 
 import { Queue } from 'bullmq';
-import { eq } from 'drizzle-orm';
 import { redis } from '../lib/redis.js';
-import { db } from '../db/client.js';
-import { cronRuns } from '../db/schema/adminExtras.js';
+import { prisma } from '../db/client.js';
 import { horoscopeQueue, tempCleanupQueue } from './queues.js';
 import { logger } from '../lib/logger.js';
 import { reportError } from '../observability/errorReporter.js';
@@ -14,11 +12,10 @@ import { v4 as uuidv4 } from 'uuid';
 // ── Period key helpers ────────────────────────────────────────────────────────
 
 function dailyKey(d = new Date()): string {
-  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+  return d.toISOString().slice(0, 10);
 }
 
 function weeklyKey(d = new Date()): string {
-  // ISO week: YYYY-WNN
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   const dayNum = date.getUTCDay() || 7;
   date.setUTCDate(date.getUTCDate() + 4 - dayNum);
@@ -43,21 +40,19 @@ async function withCronTracking(jobName: string, fn: () => Promise<void>): Promi
   let runId: string | undefined;
 
   try {
-    const [row] = await db.insert(cronRuns).values({
-      jobName,
-      status: 'running',
-      startedAt,
-      traceId,
-    }).returning({ id: cronRuns.id });
-    runId = row.id;
+    const run = await prisma.cronRun.create({
+      data: { jobName, status: 'running', startedAt, traceId },
+    });
+    runId = run.id;
 
     await fn();
 
     if (runId) {
       const durationMs = Date.now() - startedAt.getTime();
-      await db.update(cronRuns)
-        .set({ status: 'succeeded', finishedAt: new Date(), durationMs })
-        .where(eq(cronRuns.id, runId!));
+      await prisma.cronRun.update({
+        where: { id: runId },
+        data: { status: 'succeeded', finishedAt: new Date(), durationMs },
+      });
     }
   } catch (err) {
     logger.error({ jobName, err }, '[Scheduler] cron job failed');
@@ -70,14 +65,15 @@ async function withCronTracking(jobName: string, fn: () => Promise<void>): Promi
     });
 
     if (runId) {
-      await db.update(cronRuns)
-        .set({
+      await prisma.cronRun.update({
+        where: { id: runId },
+        data: {
           status: 'failed',
           finishedAt: new Date(),
           durationMs: Date.now() - startedAt.getTime(),
           errorMessage: (err as Error).message,
-        })
-        .where(eq(cronRuns.id, runId!));
+        },
+      });
     }
   }
 }
@@ -89,7 +85,7 @@ async function triggerHoroscopeGeneration(period: 'daily' | 'weekly' | 'monthly'
     `${period}-${periodKey}`,
     { period, periodKey },
     {
-      jobId: `horoscope-${period}-${periodKey}`, // deduplicate
+      jobId: `horoscope-${period}-${periodKey}`,
       attempts: 3,
       backoff: { type: 'exponential', delay: 60_000 },
     },
@@ -98,11 +94,6 @@ async function triggerHoroscopeGeneration(period: 'daily' | 'weekly' | 'monthly'
 }
 
 // ── BullMQ repeatable job registration ───────────────────────────────────────
-// Cron expressions are in UTC. IST = UTC+5:30.
-// Daily: 17:00 UTC = 22:30 IST (generates for next day)
-// Weekly: every Monday 17:30 UTC = 23:00 IST Sunday (generates for the new week)
-// Monthly: 1st of month 17:00 UTC (generates for the new month)
-// Yearly: Jan 1st 17:00 UTC (generates for the new year)
 
 const CRON_JOBS: Array<{
   name: string;
@@ -114,7 +105,6 @@ const CRON_JOBS: Array<{
     cron: '0 17 * * *',
     handler: async () => {
       await withCronTracking('horoscope.daily', async () => {
-        // Generate for tomorrow
         const tomorrow = new Date();
         tomorrow.setDate(tomorrow.getDate() + 1);
         await triggerHoroscopeGeneration('daily', dailyKey(tomorrow));
@@ -123,10 +113,9 @@ const CRON_JOBS: Array<{
   },
   {
     name: 'horoscope.weekly',
-    cron: '30 17 * * 0', // Sunday 17:30 UTC → Monday IST
+    cron: '30 17 * * 0',
     handler: async () => {
       await withCronTracking('horoscope.weekly', async () => {
-        // Generate for next week (Monday)
         const nextMonday = new Date();
         const day = nextMonday.getDay();
         const daysUntilMonday = day === 0 ? 1 : 8 - day;
@@ -137,7 +126,7 @@ const CRON_JOBS: Array<{
   },
   {
     name: 'horoscope.monthly',
-    cron: '0 17 1 * *', // 1st of every month
+    cron: '0 17 1 * *',
     handler: async () => {
       await withCronTracking('horoscope.monthly', async () => {
         await triggerHoroscopeGeneration('monthly', monthlyKey());
@@ -146,7 +135,7 @@ const CRON_JOBS: Array<{
   },
   {
     name: 'horoscope.yearly',
-    cron: '0 17 1 1 *', // Jan 1st
+    cron: '0 17 1 1 *',
     handler: async () => {
       await withCronTracking('horoscope.yearly', async () => {
         await triggerHoroscopeGeneration('yearly', yearlyKey());
@@ -154,7 +143,6 @@ const CRON_JOBS: Array<{
     },
   },
   {
-    // Weekly temp file cleanup: Sunday 02:00 UTC
     name: 'tempCleanup.weekly',
     cron: '0 2 * * 0',
     handler: async () => {

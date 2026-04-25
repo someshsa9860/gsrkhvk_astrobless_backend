@@ -1,12 +1,7 @@
 // Dashboard service: live KPI snapshot. Each metric is wrapped in try/catch so
 // a single DB failure never breaks the entire dashboard response.
 
-import { eq, gte, sql, desc } from 'drizzle-orm';
-import { db } from '../../db/client.js';
-import { customers } from '../../db/schema/customers.js';
-import { astrologers } from '../../db/schema/astrologers.js';
-import { consultations } from '../../db/schema/consultations.js';
-import { systemErrors } from '../../db/schema/observability.js';
+import { prisma } from '../../db/client.js';
 import { logger } from '../../lib/logger.js';
 
 // ── Overview ──────────────────────────────────────────────────────────────────
@@ -32,51 +27,11 @@ export async function getOverview() {
     pendingKyc,
     recentErrors,
   ] = await Promise.all([
-    safeCount(
-      db
-        .select({ count: sql<number>`count(*)` })
-        .from(consultations)
-        .where(eq(consultations.status, 'active'))
-        .then((r) => Number(r[0]?.count ?? 0)),
-      0,
-      'activeConsultations',
-    ),
-    safeCount(
-      db
-        .select({ count: sql<number>`count(*)` })
-        .from(astrologers)
-        .where(eq(astrologers.isOnline, true))
-        .then((r) => Number(r[0]?.count ?? 0)),
-      0,
-      'astrologersOnline',
-    ),
-    safeCount(
-      db
-        .select({ count: sql<number>`count(*)` })
-        .from(customers)
-        .where(gte(customers.createdAt, today))
-        .then((r) => Number(r[0]?.count ?? 0)),
-      0,
-      'newSignupsToday',
-    ),
-    safeCount(
-      db
-        .select({ count: sql<number>`count(*)` })
-        .from(astrologers)
-        .where(eq(astrologers.kycStatus, 'pending'))
-        .then((r) => Number(r[0]?.count ?? 0)),
-      0,
-      'pendingKyc',
-    ),
-    safeCount(
-      db
-        .select({ count: sql<number>`count(*)` })
-        .from(systemErrors)
-        .where(gte(systemErrors.createdAt, last24h))
-        .then((r) => Number(r[0]?.count ?? 0)),
-      0,
-      'recentErrors',
-    ),
+    safeCount(prisma.consultation.count({ where: { status: 'active' } }), 0, 'activeConsultations'),
+    safeCount(prisma.astrologer.count({ where: { isOnline: true } }), 0, 'astrologersOnline'),
+    safeCount(prisma.customer.count({ where: { createdAt: { gte: today } } }), 0, 'newSignupsToday'),
+    safeCount(prisma.astrologer.count({ where: { kycStatus: 'pending' } }), 0, 'pendingKyc'),
+    safeCount(prisma.systemError.count({ where: { createdAt: { gte: last24h } } }), 0, 'recentErrors'),
   ]);
 
   return {
@@ -100,69 +55,57 @@ export interface GeoPoint {
 }
 
 export async function getGeoDistribution(): Promise<GeoPoint[]> {
-  // Aggregate customers by country
-  const customerRows = await db
-    .select({
-      country: customers.registrationCountry,
-      countryCode: customers.registrationCountryCode,
-      city: customers.registrationCity,
-      count: sql<number>`count(*)`,
-    })
-    .from(customers)
-    .where(sql`${customers.registrationCountryCode} is not null`)
-    .groupBy(customers.registrationCountry, customers.registrationCountryCode, customers.registrationCity)
-    .orderBy(desc(sql`count(*)`))
-    .limit(50);
+  const [customerRows, astrologerRows] = await Promise.all([
+    prisma.customer.groupBy({
+      by: ['registrationCountry', 'registrationCountryCode', 'registrationCity'],
+      where: { registrationCountryCode: { not: null } },
+      _count: { id: true },
+      orderBy: { _count: { id: 'desc' } },
+      take: 50,
+    }),
+    prisma.astrologer.groupBy({
+      by: ['registrationCountry', 'registrationCountryCode', 'registrationCity'],
+      where: { registrationCountryCode: { not: null } },
+      _count: { id: true },
+      orderBy: { _count: { id: 'desc' } },
+      take: 50,
+    }),
+  ]);
 
-  // Aggregate astrologers by country
-  const astrologerRows = await db
-    .select({
-      country: astrologers.registrationCountry,
-      countryCode: astrologers.registrationCountryCode,
-      city: astrologers.registrationCity,
-      count: sql<number>`count(*)`,
-    })
-    .from(astrologers)
-    .where(sql`${astrologers.registrationCountryCode} is not null`)
-    .groupBy(astrologers.registrationCountry, astrologers.registrationCountryCode, astrologers.registrationCity)
-    .orderBy(desc(sql`count(*)`))
-    .limit(50);
-
-  // Merge by country+city key
   const map = new Map<string, GeoPoint>();
 
   for (const r of customerRows) {
-    const key = `${r.countryCode ?? ''}:${r.city ?? ''}`;
+    const key = `${r.registrationCountryCode ?? ''}:${r.registrationCity ?? ''}`;
     const existing = map.get(key);
     if (existing) {
-      existing.customers += Number(r.count);
-      existing.total += Number(r.count);
+      existing.customers += r._count.id;
+      existing.total += r._count.id;
     } else {
       map.set(key, {
-        country: r.country ?? 'Unknown',
-        countryCode: r.countryCode ?? '',
-        city: r.city,
-        customers: Number(r.count),
+        country: r.registrationCountry ?? 'Unknown',
+        countryCode: r.registrationCountryCode ?? '',
+        city: r.registrationCity,
+        customers: r._count.id,
         astrologers: 0,
-        total: Number(r.count),
+        total: r._count.id,
       });
     }
   }
 
   for (const r of astrologerRows) {
-    const key = `${r.countryCode ?? ''}:${r.city ?? ''}`;
+    const key = `${r.registrationCountryCode ?? ''}:${r.registrationCity ?? ''}`;
     const existing = map.get(key);
     if (existing) {
-      existing.astrologers += Number(r.count);
-      existing.total += Number(r.count);
+      existing.astrologers += r._count.id;
+      existing.total += r._count.id;
     } else {
       map.set(key, {
-        country: r.country ?? 'Unknown',
-        countryCode: r.countryCode ?? '',
-        city: r.city,
+        country: r.registrationCountry ?? 'Unknown',
+        countryCode: r.registrationCountryCode ?? '',
+        city: r.registrationCity,
         customers: 0,
-        astrologers: Number(r.count),
-        total: Number(r.count),
+        astrologers: r._count.id,
+        total: r._count.id,
       });
     }
   }

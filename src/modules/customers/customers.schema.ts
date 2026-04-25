@@ -8,7 +8,7 @@ export const UpdateProfileSchema = z.object({
   birthPlace: z.string().optional(),
   birthLat: z.number().optional(),
   birthLng: z.number().optional(),
-  profileImageUrl: z.string().url().optional(),
+  profileImageKey: z.string().optional(),
 });
 
 export const CustomerProfileResponseSchema = z.object({
@@ -19,7 +19,7 @@ export const CustomerProfileResponseSchema = z.object({
   gender: z.string().nullable(),
   dob: z.string().nullable(),
   birthPlace: z.string().nullable(),
-  profileImageUrl: z.string().nullable(),
+  profileImageKey: z.string().nullable(),
   referralCode: z.string().nullable(),
   createdAt: z.string(),
 });

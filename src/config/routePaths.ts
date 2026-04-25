@@ -200,18 +200,16 @@ export const ASTROLOGER_ROUTES = {
 
 export const ADMIN_ROUTES = {
   auth: {
-    /** POST – Verify Google ID token; returns tempToken. */
+    /** POST – Verify Google ID token; issues full session. */
     google: '/v1/admin/auth/google',
     /** POST – Send email OTP. */
     sendEmailOtp: '/v1/admin/auth/email/send-otp',
-    /** POST – Verify email OTP; returns tempToken. */
+    /** POST – Verify email OTP; issues full session. */
     verifyEmailOtp: '/v1/admin/auth/email/verify-otp',
-    /** POST – Verify TOTP and issue full session. */
-    totp: '/v1/admin/auth/totp',
-    /** POST – Begin TOTP enrollment; returns QR + secret. */
-    totpEnroll: '/v1/admin/auth/totp/enroll',
-    /** POST – Confirm TOTP enrollment. */
-    totpConfirm: '/v1/admin/auth/totp/confirm',
+    /** POST – Send phone OTP. */
+    sendPhoneOtp: '/v1/admin/auth/phone/send-otp',
+    /** POST – Verify phone OTP; issues full session. */
+    verifyPhoneOtp: '/v1/admin/auth/phone/verify-otp',
     /** POST – Rotate admin refresh token. */
     refresh: '/v1/admin/auth/refresh',
     /** POST – Revoke admin session. */

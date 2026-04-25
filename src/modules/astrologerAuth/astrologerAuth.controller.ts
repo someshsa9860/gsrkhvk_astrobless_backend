@@ -8,6 +8,9 @@ import type {
   EmailLoginSchema,
   RefreshTokenSchema,
   AppleAuthSchema,
+  ResendEmailOtpSchema,
+  ForgotPasswordSchema,
+  ResetPasswordSchema,
 } from './astrologerAuth.schema.js';
 import type { z } from 'zod';
 
@@ -46,4 +49,27 @@ export async function refreshToken(req: FastifyRequest<{ Body: z.infer<typeof Re
 export async function appleAuth(req: FastifyRequest<{ Body: z.infer<typeof AppleAuthSchema> }>, reply: FastifyReply) {
   const tokens = await service.appleAuth(req.body.identityToken, req.body.nonce, req.body.displayName);
   return reply.send({ ok: true, data: { ...tokens, expiresIn: 900 }, traceId: req.requestContext.traceId });
+}
+
+export async function resendEmailOtp(req: FastifyRequest<{ Body: z.infer<typeof ResendEmailOtpSchema> }>, reply: FastifyReply) {
+  await service.resendEmailOtp(req.body.email);
+  return reply.send({ ok: true, data: { message: 'OTP resent.' }, traceId: req.requestContext.traceId });
+}
+
+export async function forgotPassword(req: FastifyRequest<{ Body: z.infer<typeof ForgotPasswordSchema> }>, reply: FastifyReply) {
+  await service.forgotPassword(req.body.email);
+  return reply.send({ ok: true, data: { message: 'If that email is registered, a reset code has been sent.' }, traceId: req.requestContext.traceId });
+}
+
+export async function resetPassword(req: FastifyRequest<{ Body: z.infer<typeof ResetPasswordSchema> }>, reply: FastifyReply) {
+  await service.resetPassword(req.body.email, req.body.otp, req.body.newPassword);
+  return reply.send({ ok: true, data: { message: 'Password reset successfully.' }, traceId: req.requestContext.traceId });
+}
+
+export async function logout(req: FastifyRequest, reply: FastifyReply) {
+  const user = (req as { user?: { sessionId?: string; sub?: string } }).user;
+  if (user?.sessionId && user?.sub) {
+    await service.logout(user.sessionId, user.sub);
+  }
+  return reply.send({ ok: true, data: { message: 'Logged out.' }, traceId: req.requestContext.traceId });
 }

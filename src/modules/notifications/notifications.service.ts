@@ -1,8 +1,6 @@
-import { eq } from 'drizzle-orm';
 import admin from 'firebase-admin';
 import { env } from '../../config/env.js';
-import { db } from '../../db/client.js';
-import { fcmTokens, notifications } from '../../db/schema/content.js';
+import { prisma } from '../../db/client.js';
 import { logger } from '../../lib/logger.js';
 
 let firebaseInitialized = false;
@@ -20,15 +18,18 @@ function ensureFirebase(): void {
 }
 
 export async function upsertFcmToken(ownerType: 'customer' | 'astrologer', ownerId: string, token: string, platform: 'ios' | 'android' | 'web'): Promise<void> {
-  await db.insert(fcmTokens).values({ ownerType, ownerId, token, platform })
-    .onConflictDoUpdate({ target: fcmTokens.token, set: { lastSeenAt: new Date() } });
+  await prisma.fcmToken.upsert({
+    where: { token },
+    create: { ownerType, ownerId, token, platform },
+    update: { lastSeenAt: new Date() },
+  });
 }
 
 export async function sendPush(ownerType: 'customer' | 'astrologer', ownerId: string, title: string, body: string, data?: Record<string, string>): Promise<void> {
   ensureFirebase();
   if (!firebaseInitialized) return;
 
-  const tokens = await db.query.fcmTokens.findMany({ where: eq(fcmTokens.ownerId, ownerId), columns: { token: true } });
+  const tokens = await prisma.fcmToken.findMany({ where: { ownerId }, select: { token: true } });
   if (!tokens.length) return;
 
   const messages: admin.messaging.Message[] = tokens.map((t) => ({
@@ -51,5 +52,7 @@ export async function createInAppNotification(
   body?: string,
   data?: Record<string, unknown>,
 ): Promise<void> {
-  await db.insert(notifications).values({ recipientType, recipientId, type, title, body, data: data ?? null });
+  await prisma.notification.create({
+    data: { recipientType, recipientId, type, title, body: body ?? null, data: data ?? undefined },
+  });
 }

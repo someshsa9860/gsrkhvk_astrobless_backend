@@ -8,6 +8,8 @@ import {
   VerifyEmailOtpSchema,
   ResendEmailOtpSchema,
   EmailLoginSchema,
+  ForgotPasswordSchema,
+  ResetPasswordSchema,
   GoogleAuthSchema,
   AppleAuthSchema,
   RefreshTokenSchema,
@@ -72,6 +74,25 @@ export const customerAuthRoutes: FastifyPluginAsync = async (app) => {
       body: zodToJsonSchema(EmailLoginSchema),
     },
     handler: ctrl.emailLogin,
+  });
+
+  app.post(`${prefix}/email/forgot-password`, {
+    schema: {
+      tags: ['customer:auth'],
+      summary: 'Request password reset OTP',
+      description: 'Sends a 6-digit OTP to the email. Always responds with 200 (no email enumeration).',
+      body: zodToJsonSchema(ForgotPasswordSchema),
+    },
+    handler: ctrl.forgotPassword,
+  });
+
+  app.post(`${prefix}/email/reset-password`, {
+    schema: {
+      tags: ['customer:auth'],
+      summary: 'Reset password using OTP',
+      body: zodToJsonSchema(ResetPasswordSchema),
+    },
+    handler: ctrl.resetPassword,
   });
 
   app.post(`${prefix}/google`, {

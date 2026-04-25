@@ -48,6 +48,20 @@ export async function buildApp() {
   await app.register(requestContextPlugin);
   await app.register(errorHandlerPlugin);
 
+  // Allow empty bodies for routes that don't require a body (e.g. logout)
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    if (!body || body === '') {
+      done(null, undefined);
+      return;
+    }
+    try {
+      done(null, JSON.parse(body as string));
+    } catch (e) {
+      (e as Error & { statusCode?: number }).statusCode = 400;
+      done(e as Error);
+    }
+  });
+
   await app.register(cors, {
     origin: env.NODE_ENV === 'production' ? [env.APP_BASE_URL, env.ADMIN_BASE_URL] : true,
     credentials: true,

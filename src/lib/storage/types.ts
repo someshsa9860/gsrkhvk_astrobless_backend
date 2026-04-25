@@ -57,10 +57,21 @@ export type ImageCategory =
 /** Variant sizes generated for every uploaded image. */
 export type ImageVariant = 'sm' | 'md' | 'lg';
 
-/** All URLs for an uploaded image's variants. */
-export interface ImageVariants {
+/** Storage keys for all variants of an uploaded image (never URLs). */
+export interface ImageVariantKeys {
   original: string;
   sm: string;
   md: string;
   lg: string;
 }
+
+/** Resolved public URLs for all image variants (generated at read time from keys). */
+export interface ImageVariantUrls {
+  original: string;
+  sm: string;
+  md: string;
+  lg: string;
+}
+
+/** @deprecated Use ImageVariantKeys for storage, ImageVariantUrls for API responses. */
+export type ImageVariants = ImageVariantKeys;

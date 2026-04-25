@@ -1,17 +1,14 @@
-import { eq } from 'drizzle-orm';
-import { db } from '../../db/client.js';
-import { customers } from '../../db/schema/customers.js';
-import type { Customer } from '../../db/schema/customers.js';
+import { prisma } from '../../db/client.js';
+import type { Customer, Prisma } from '@prisma/client';
 
-export async function findById(id: string): Promise<Customer | undefined> {
-  return db.query.customers.findFirst({ where: eq(customers.id, id) });
+export async function findById(id: string): Promise<Customer | null> {
+  return prisma.customer.findFirst({ where: { id } });
 }
 
-export async function update(id: string, data: Partial<typeof customers.$inferInsert>): Promise<Customer | undefined> {
-  const [updated] = await db.update(customers).set({ ...data, updatedAt: new Date() }).where(eq(customers.id, id)).returning();
-  return updated;
+export async function update(id: string, data: Prisma.CustomerUpdateInput): Promise<Customer | null> {
+  return prisma.customer.update({ where: { id }, data: { ...data, updatedAt: new Date() } });
 }
 
-export async function findByPhone(phone: string): Promise<Customer | undefined> {
-  return db.query.customers.findFirst({ where: eq(customers.phone, phone) });
+export async function findByPhone(phone: string): Promise<Customer | null> {
+  return prisma.customer.findFirst({ where: { phone } });
 }

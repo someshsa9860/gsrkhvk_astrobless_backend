@@ -41,20 +41,3 @@ export async function deleteOtp(key: string): Promise<void> {
   await redis.del(key);
 }
 
-// ─── Session helpers ─────────────────────────────────────────────────────────
-
-export function adminTempTokenKey(token: string): string {
-  return `admin:tempToken:${token}`;
-}
-
-export async function setTempToken(key: string, value: string, ttlSeconds: number): Promise<void> {
-  await redis.set(key, value, 'EX', ttlSeconds);
-}
-
-export async function getTempToken(key: string): Promise<string | null> {
-  return redis.get(key);
-}
-
-export async function deleteTempToken(key: string): Promise<void> {
-  await redis.del(key);
-}

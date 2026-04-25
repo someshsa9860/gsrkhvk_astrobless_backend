@@ -36,3 +36,21 @@ export const AppleAuthSchema = z.object({
   nonce: z.string().min(1).describe('Nonce used during Apple auth flow'),
   displayName: z.string().min(1).optional().describe('User display name (only available on first sign-in)'),
 });
+
+export const ResendEmailOtpSchema = z.object({
+  email: z.string().email(),
+});
+
+export const ForgotPasswordSchema = z.object({
+  email: z.string().email(),
+});
+
+export const ResetPasswordSchema = z.object({
+  email: z.string().email(),
+  otp: z.string().length(6),
+  newPassword: z.string().min(8),
+});
+
+export const LogoutSchema = z.object({
+  refreshToken: z.string().min(1),
+});

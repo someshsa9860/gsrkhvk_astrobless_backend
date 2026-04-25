@@ -1,8 +1,4 @@
-// Business logic for admin-facing astrologer management.
-
-import { eq, ilike, desc, and, sql } from 'drizzle-orm';
-import { db } from '../../db/client.js';
-import { astrologers } from '../../db/schema/astrologers.js';
+import { prisma } from '../../db/client.js';
 import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../observability/auditLogger.js';
 import { paginationFrom, toPagedResult } from '../shared/listQuery.js';
@@ -17,47 +13,41 @@ import type {
 
 // ── List ──────────────────────────────────────────────────────────────────────
 
-// Runs list + count in parallel; kycStatus/isOnline/isBlocked all composable.
 export async function listAstrologers(q: AstrologerListQuery) {
   const { offset, limit } = paginationFrom(q);
-  const conditions = [];
-  if (q.search) conditions.push(ilike(astrologers.displayName, `%${q.search}%`));
-  if (q.kycStatus) conditions.push(eq(astrologers.kycStatus, q.kycStatus));
-  if (q.isOnline !== undefined) conditions.push(eq(astrologers.isOnline, q.isOnline));
-  if (q.isBlocked !== undefined) conditions.push(eq(astrologers.isBlocked, q.isBlocked));
+  const where: Record<string, unknown> = {};
+  if (q.search) where['displayName'] = { contains: q.search, mode: 'insensitive' };
+  if (q.kycStatus) where['kycStatus'] = q.kycStatus;
+  if (q.isOnline !== undefined) where['isOnline'] = q.isOnline;
+  if (q.isBlocked !== undefined) where['isBlocked'] = q.isBlocked;
 
-  const where = conditions.length ? and(...conditions) : undefined;
-
-  const [items, countResult] = await Promise.all([
-    db.query.astrologers.findMany({ where, limit, offset, orderBy: [desc(astrologers.createdAt)] }),
-    db.select({ count: sql<number>`count(*)` }).from(astrologers).where(where),
+  const [items, total] = await prisma.$transaction([
+    prisma.astrologer.findMany({ where, skip: offset, take: limit, orderBy: { createdAt: 'desc' } }),
+    prisma.astrologer.count({ where }),
   ]);
 
-  return toPagedResult(items, Number(countResult[0]?.count ?? 0), q);
+  return toPagedResult(items, total, q);
 }
 
 // ── Detail ────────────────────────────────────────────────────────────────────
 
-// Returns full profile — kycDocsRef and bankAccountRef are returned as-is;
-// callers must sign S3 URLs before sending to admin UI.
 export async function getAstrologer(id: string) {
-  const astrologer = await db.query.astrologers.findFirst({ where: eq(astrologers.id, id) });
+  const astrologer = await prisma.astrologer.findFirst({ where: { id } });
   if (!astrologer) throw new AppError('NOT_FOUND', 'Astrologer not found.', 404);
   return astrologer;
 }
 
 // ── KYC decision ──────────────────────────────────────────────────────────────
 
-// Approving KYC also flips isVerified so the astrologer appears in search.
 export async function decideKyc(adminId: string, astrologerId: string, input: KycDecisionInput) {
-  const before = await db.query.astrologers.findFirst({ where: eq(astrologers.id, astrologerId) });
+  const before = await prisma.astrologer.findFirst({ where: { id: astrologerId } });
   if (!before) throw new AppError('NOT_FOUND', 'Astrologer not found.', 404);
 
   const isApproved = input.decision === 'approved';
-  await db
-    .update(astrologers)
-    .set({ kycStatus: input.decision, isVerified: isApproved, updatedAt: new Date() })
-    .where(eq(astrologers.id, astrologerId));
+  await prisma.astrologer.update({
+    where: { id: astrologerId },
+    data: { kycStatus: input.decision, isVerified: isApproved, updatedAt: new Date() },
+  });
 
   await writeAuditLog({
     actorType: 'admin',
@@ -74,15 +64,14 @@ export async function decideKyc(adminId: string, astrologerId: string, input: Ky
 
 // ── Block / Unblock ───────────────────────────────────────────────────────────
 
-// Blocking an astrologer prevents them from going online or accepting consultations.
 export async function blockAstrologer(adminId: string, astrologerId: string, input: BlockAstrologerInput) {
-  const before = await db.query.astrologers.findFirst({ where: eq(astrologers.id, astrologerId) });
+  const before = await prisma.astrologer.findFirst({ where: { id: astrologerId } });
   if (!before) throw new AppError('NOT_FOUND', 'Astrologer not found.', 404);
 
-  await db
-    .update(astrologers)
-    .set({ isBlocked: true, blockedReason: input.reason, isOnline: false, updatedAt: new Date() })
-    .where(eq(astrologers.id, astrologerId));
+  await prisma.astrologer.update({
+    where: { id: astrologerId },
+    data: { isBlocked: true, blockedReason: input.reason, isOnline: false, updatedAt: new Date() },
+  });
 
   await writeAuditLog({
     actorType: 'admin',
@@ -96,15 +85,14 @@ export async function blockAstrologer(adminId: string, astrologerId: string, inp
   });
 }
 
-// Unblocking restores availability but does NOT auto-set isOnline — astrologer sets that themselves.
 export async function unblockAstrologer(adminId: string, astrologerId: string) {
-  const before = await db.query.astrologers.findFirst({ where: eq(astrologers.id, astrologerId) });
+  const before = await prisma.astrologer.findFirst({ where: { id: astrologerId } });
   if (!before) throw new AppError('NOT_FOUND', 'Astrologer not found.', 404);
 
-  await db
-    .update(astrologers)
-    .set({ isBlocked: false, blockedReason: null, updatedAt: new Date() })
-    .where(eq(astrologers.id, astrologerId));
+  await prisma.astrologer.update({
+    where: { id: astrologerId },
+    data: { isBlocked: false, blockedReason: null, updatedAt: new Date() },
+  });
 
   await writeAuditLog({
     actorType: 'admin',
@@ -120,15 +108,14 @@ export async function unblockAstrologer(adminId: string, astrologerId: string) {
 
 // ── Commission override ───────────────────────────────────────────────────────
 
-// Overrides the astrologer's individual commission — takes effect on the next consultation.
 export async function overrideCommission(adminId: string, astrologerId: string, input: CommissionOverrideInput) {
-  const before = await db.query.astrologers.findFirst({ where: eq(astrologers.id, astrologerId) });
+  const before = await prisma.astrologer.findFirst({ where: { id: astrologerId } });
   if (!before) throw new AppError('NOT_FOUND', 'Astrologer not found.', 404);
 
-  await db
-    .update(astrologers)
-    .set({ commissionPct: String(input.commissionPct), updatedAt: new Date() })
-    .where(eq(astrologers.id, astrologerId));
+  await prisma.astrologer.update({
+    where: { id: astrologerId },
+    data: { commissionPct: String(input.commissionPct), updatedAt: new Date() },
+  });
 
   await writeAuditLog({
     actorType: 'admin',
@@ -137,7 +124,7 @@ export async function overrideCommission(adminId: string, astrologerId: string, 
     targetType: 'astrologer',
     targetId: astrologerId,
     summary: `Commission changed to ${input.commissionPct}%. Reason: ${input.reason}`,
-    beforeState: { commissionPct: before.commissionPct },
+    beforeState: { commissionPct: String(before.commissionPct) },
     afterState: { commissionPct: input.commissionPct },
     metadata: { reason: input.reason },
   });
@@ -146,9 +133,17 @@ export async function overrideCommission(adminId: string, astrologerId: string, 
 // ── Create ────────────────────────────────────────────────────────────────────
 
 export async function createAstrologer(adminId: string, input: CreateAstrologerInput) {
-  const [created] = await db
-    .insert(astrologers)
-    .values({
+  if (input.phone) {
+    const phoneExists = await prisma.astrologer.findUnique({ where: { phone: input.phone }, select: { id: true } });
+    if (phoneExists) throw new AppError('CONFLICT', `Phone number ${input.phone} is already registered to another astrologer.`, 409);
+  }
+  if (input.email) {
+    const emailExists = await prisma.astrologer.findUnique({ where: { email: input.email }, select: { id: true } });
+    if (emailExists) throw new AppError('CONFLICT', `Email ${input.email} is already registered to another astrologer.`, 409);
+  }
+
+  const created = await prisma.astrologer.create({
+    data: {
       displayName: input.displayName,
       phone: input.phone ?? null,
       email: input.email ?? null,
@@ -156,7 +151,7 @@ export async function createAstrologer(adminId: string, input: CreateAstrologerI
       legalName: input.legalName ?? null,
       registrationCountry: input.registrationCountry ?? null,
       panNumber: input.panNumber ?? null,
-      profileImageUrl: input.profileImageUrl ?? null,
+      profileImageKey: input.profileImageKey ?? null,
       dob: input.dob ?? null,
       astroblessCategory: input.astroblessCategory ?? null,
       primarySkill: input.primarySkill ?? null,
@@ -171,7 +166,7 @@ export async function createAstrologer(adminId: string, input: CreateAstrologerI
       pricePerMinVideoUsd: input.pricePerMinVideoUsd ?? null,
       pricePerReport: input.pricePerReport ?? null,
       pricePerReportUsd: input.pricePerReportUsd ?? null,
-      commissionPct: String(input.commissionPct ?? 30),
+      commissionPct: input.commissionPct ? String(input.commissionPct) : '30.00',
       onboardingReason: input.onboardingReason ?? null,
       interviewTime: input.interviewTime ?? null,
       currentCity: input.currentCity ?? null,
@@ -184,9 +179,9 @@ export async function createAstrologer(adminId: string, input: CreateAstrologerI
       facebookUrl: input.facebookUrl ?? null,
       linkedinUrl: input.linkedinUrl ?? null,
       youtubeUrl: input.youtubeUrl ?? null,
-      availability: input.availability ?? null,
-    })
-    .returning();
+      availability: input.availability ?? undefined,
+    },
+  });
 
   await writeAuditLog({
     actorType: 'admin',
@@ -194,10 +189,9 @@ export async function createAstrologer(adminId: string, input: CreateAstrologerI
     action: 'astrologer.create',
     targetType: 'astrologer',
     targetId: created.id,
-    summary: `Admin created astrologer "${input.displayName}"`,
+    summary: `Admin created astrologer "${created.displayName}"`,
     beforeState: null,
-    afterState: created,
-    metadata: {},
+    afterState: created as unknown as Record<string, unknown>,
   });
 
   return created;
@@ -206,68 +200,66 @@ export async function createAstrologer(adminId: string, input: CreateAstrologerI
 // ── Update ────────────────────────────────────────────────────────────────────
 
 export async function updateAstrologer(adminId: string, astrologerId: string, input: UpdateAstrologerInput) {
-  const before = await db.query.astrologers.findFirst({ where: eq(astrologers.id, astrologerId) });
+  const before = await prisma.astrologer.findFirst({ where: { id: astrologerId } });
   if (!before) throw new AppError('NOT_FOUND', 'Astrologer not found.', 404);
 
-  const updates: Record<string, unknown> = { updatedAt: new Date() };
-  // Personal
-  if (input.displayName !== undefined) updates.displayName = input.displayName;
-  if (input.phone !== undefined) updates.phone = input.phone;
-  if (input.email !== undefined) updates.email = input.email;
-  if (input.whatsappNumber !== undefined) updates.whatsappNumber = input.whatsappNumber;
-  if (input.legalName !== undefined) updates.legalName = input.legalName;
-  if (input.registrationCountry !== undefined) updates.registrationCountry = input.registrationCountry;
-  if (input.panNumber !== undefined) updates.panNumber = input.panNumber;
-  if (input.aadhaarLast4 !== undefined) updates.aadhaarLast4 = input.aadhaarLast4;
-  if (input.profileImageUrl !== undefined) updates.profileImageUrl = input.profileImageUrl;
-  if (input.upiId !== undefined) updates.upiId = input.upiId;
-  // KYC docs: merge patch into existing jsonb
+  if (input.phone !== undefined && input.phone !== before.phone) {
+    const phoneExists = await prisma.astrologer.findUnique({ where: { phone: input.phone }, select: { id: true } });
+    if (phoneExists) throw new AppError('CONFLICT', `Phone number ${input.phone} is already registered to another astrologer.`, 409);
+  }
+  if (input.email !== undefined && input.email !== before.email) {
+    const emailExists = await prisma.astrologer.findUnique({ where: { email: input.email }, select: { id: true } });
+    if (emailExists) throw new AppError('CONFLICT', `Email ${input.email} is already registered to another astrologer.`, 409);
+  }
+
+  const data: Record<string, unknown> = { updatedAt: new Date() };
+  if (input.displayName !== undefined) data['displayName'] = input.displayName;
+  if (input.phone !== undefined) data['phone'] = input.phone;
+  if (input.email !== undefined) data['email'] = input.email;
+  if (input.whatsappNumber !== undefined) data['whatsappNumber'] = input.whatsappNumber;
+  if (input.legalName !== undefined) data['legalName'] = input.legalName;
+  if (input.registrationCountry !== undefined) data['registrationCountry'] = input.registrationCountry;
+  if (input.panNumber !== undefined) data['panNumber'] = input.panNumber;
+  if (input.aadhaarLast4 !== undefined) data['aadhaarLast4'] = input.aadhaarLast4;
+  if (input.profileImageKey !== undefined) data['profileImageKey'] = input.profileImageKey;
+  if (input.upiId !== undefined) data['upiId'] = input.upiId;
   if (input.kycDocsRef !== undefined) {
     const existing = (before.kycDocsRef ?? {}) as Record<string, unknown>;
-    updates.kycDocsRef = { ...existing, ...input.kycDocsRef };
+    data['kycDocsRef'] = { ...existing, ...input.kycDocsRef };
   }
-  // Bank: merge patch into existing jsonb
   if (input.bankAccountRef !== undefined) {
     const existing = (before.bankAccountRef ?? {}) as Record<string, unknown>;
-    updates.bankAccountRef = { ...existing, ...input.bankAccountRef };
+    data['bankAccountRef'] = { ...existing, ...input.bankAccountRef };
   }
-  // Skill
-  if (input.dob !== undefined) updates.dob = input.dob;
-  if (input.astroblessCategory !== undefined) updates.astroblessCategory = input.astroblessCategory;
-  if (input.primarySkill !== undefined) updates.primarySkill = input.primarySkill;
-  if (input.bio !== undefined) updates.bio = input.bio;
-  if (input.languages !== undefined) updates.languages = input.languages;
-  if (input.specialties !== undefined) updates.specialties = input.specialties;
-  if (input.experienceYears !== undefined) updates.experienceYears = input.experienceYears;
-  if (input.pricePerMinChat !== undefined) updates.pricePerMinChat = input.pricePerMinChat;
-  if (input.pricePerMinCall !== undefined) updates.pricePerMinCall = input.pricePerMinCall;
-  if (input.pricePerMinVideo !== undefined) updates.pricePerMinVideo = input.pricePerMinVideo;
-  if (input.pricePerMinCallUsd !== undefined) updates.pricePerMinCallUsd = input.pricePerMinCallUsd;
-  if (input.pricePerMinVideoUsd !== undefined) updates.pricePerMinVideoUsd = input.pricePerMinVideoUsd;
-  if (input.pricePerReport !== undefined) updates.pricePerReport = input.pricePerReport;
-  if (input.pricePerReportUsd !== undefined) updates.pricePerReportUsd = input.pricePerReportUsd;
-  // Other details
-  if (input.onboardingReason !== undefined) updates.onboardingReason = input.onboardingReason;
-  if (input.interviewTime !== undefined) updates.interviewTime = input.interviewTime;
-  if (input.currentCity !== undefined) updates.currentCity = input.currentCity;
-  if (input.otherBusinessSource !== undefined) updates.otherBusinessSource = input.otherBusinessSource;
-  if (input.highestQualification !== undefined) updates.highestQualification = input.highestQualification;
-  if (input.degreeDiploma !== undefined) updates.degreeDiploma = input.degreeDiploma;
-  if (input.collegeUniversity !== undefined) updates.collegeUniversity = input.collegeUniversity;
-  if (input.astrologySources !== undefined) updates.astrologySources = input.astrologySources;
-  // Social links
-  if (input.instagramUrl !== undefined) updates.instagramUrl = input.instagramUrl;
-  if (input.facebookUrl !== undefined) updates.facebookUrl = input.facebookUrl;
-  if (input.linkedinUrl !== undefined) updates.linkedinUrl = input.linkedinUrl;
-  if (input.youtubeUrl !== undefined) updates.youtubeUrl = input.youtubeUrl;
-  // Availability
-  if (input.availability !== undefined) updates.availability = input.availability;
+  if (input.dob !== undefined) data['dob'] = input.dob;
+  if (input.astroblessCategory !== undefined) data['astroblessCategory'] = input.astroblessCategory;
+  if (input.primarySkill !== undefined) data['primarySkill'] = input.primarySkill;
+  if (input.bio !== undefined) data['bio'] = input.bio;
+  if (input.languages !== undefined) data['languages'] = input.languages;
+  if (input.specialties !== undefined) data['specialties'] = input.specialties;
+  if (input.experienceYears !== undefined) data['experienceYears'] = input.experienceYears;
+  if (input.pricePerMinChat !== undefined) data['pricePerMinChat'] = input.pricePerMinChat;
+  if (input.pricePerMinCall !== undefined) data['pricePerMinCall'] = input.pricePerMinCall;
+  if (input.pricePerMinVideo !== undefined) data['pricePerMinVideo'] = input.pricePerMinVideo;
+  if (input.pricePerMinCallUsd !== undefined) data['pricePerMinCallUsd'] = input.pricePerMinCallUsd;
+  if (input.pricePerMinVideoUsd !== undefined) data['pricePerMinVideoUsd'] = input.pricePerMinVideoUsd;
+  if (input.pricePerReport !== undefined) data['pricePerReport'] = input.pricePerReport;
+  if (input.pricePerReportUsd !== undefined) data['pricePerReportUsd'] = input.pricePerReportUsd;
+  if (input.onboardingReason !== undefined) data['onboardingReason'] = input.onboardingReason;
+  if (input.interviewTime !== undefined) data['interviewTime'] = input.interviewTime;
+  if (input.currentCity !== undefined) data['currentCity'] = input.currentCity;
+  if (input.otherBusinessSource !== undefined) data['otherBusinessSource'] = input.otherBusinessSource;
+  if (input.highestQualification !== undefined) data['highestQualification'] = input.highestQualification;
+  if (input.degreeDiploma !== undefined) data['degreeDiploma'] = input.degreeDiploma;
+  if (input.collegeUniversity !== undefined) data['collegeUniversity'] = input.collegeUniversity;
+  if (input.astrologySources !== undefined) data['astrologySources'] = input.astrologySources;
+  if (input.instagramUrl !== undefined) data['instagramUrl'] = input.instagramUrl;
+  if (input.facebookUrl !== undefined) data['facebookUrl'] = input.facebookUrl;
+  if (input.linkedinUrl !== undefined) data['linkedinUrl'] = input.linkedinUrl;
+  if (input.youtubeUrl !== undefined) data['youtubeUrl'] = input.youtubeUrl;
+  if (input.availability !== undefined) data['availability'] = input.availability;
 
-  const [updated] = await db
-    .update(astrologers)
-    .set(updates as Parameters<typeof db.update>[0])
-    .where(eq(astrologers.id, astrologerId))
-    .returning();
+  const updated = await prisma.astrologer.update({ where: { id: astrologerId }, data });
 
   await writeAuditLog({
     actorType: 'admin',
@@ -276,8 +268,8 @@ export async function updateAstrologer(adminId: string, astrologerId: string, in
     targetType: 'astrologer',
     targetId: astrologerId,
     summary: `Admin updated astrologer "${before.displayName}".`,
-    beforeState: before,
-    afterState: updated,
+    beforeState: before as unknown as Record<string, unknown>,
+    afterState: updated as unknown as Record<string, unknown>,
   });
 
   return updated;
@@ -286,15 +278,13 @@ export async function updateAstrologer(adminId: string, astrologerId: string, in
 // ── Delete (soft) ─────────────────────────────────────────────────────────────
 
 export async function deleteAstrologer(adminId: string, astrologerId: string) {
-  const before = await db.query.astrologers.findFirst({ where: eq(astrologers.id, astrologerId) });
+  const before = await prisma.astrologer.findFirst({ where: { id: astrologerId } });
   if (!before) throw new AppError('NOT_FOUND', 'Astrologer not found.', 404);
 
-  // Soft delete: block + mark as deleted via a convention (isBlocked = true, blockedReason = DELETED).
-  // Hard delete is intentionally not exposed through this endpoint.
-  await db
-    .update(astrologers)
-    .set({ isBlocked: true, blockedReason: 'DELETED_BY_ADMIN', isOnline: false, updatedAt: new Date() })
-    .where(eq(astrologers.id, astrologerId));
+  await prisma.astrologer.update({
+    where: { id: astrologerId },
+    data: { isBlocked: true, blockedReason: 'DELETED_BY_ADMIN', isOnline: false, updatedAt: new Date() },
+  });
 
   await writeAuditLog({
     actorType: 'admin',
@@ -303,7 +293,7 @@ export async function deleteAstrologer(adminId: string, astrologerId: string) {
     targetType: 'astrologer',
     targetId: astrologerId,
     summary: `Admin soft-deleted astrologer "${before.displayName}".`,
-    beforeState: before,
+    beforeState: before as unknown as Record<string, unknown>,
     afterState: { isBlocked: true, blockedReason: 'DELETED_BY_ADMIN' },
   });
 }

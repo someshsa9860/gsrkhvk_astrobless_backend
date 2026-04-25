@@ -1,0 +1,1062 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ── Customers ─────────────────────────────────────────────────────────────────
+
+model Customer {
+  id                    String    @id @default(uuid())
+  phone                 String?   @unique
+  email                 String?   @unique
+  emailVerified         Boolean   @default(false)
+  name                  String?
+  gender                String?
+  dob                   DateTime? @db.Date
+  birthTime             String?
+  birthPlace            String?
+  birthLat              Decimal?  @db.Decimal(9, 6)
+  birthLng              Decimal?  @db.Decimal(9, 6)
+  profileImageKey       String?
+  referralCode          String?   @unique
+  referredBy            String?
+  appleId               String?   @unique
+  isBlocked             Boolean   @default(false)
+  blockedReason         String?
+  registrationCity      String?
+  registrationState     String?
+  registrationCountry   String?
+  registrationCountryCode String?
+  createdAt             DateTime  @default(now()) @db.Timestamptz
+  updatedAt             DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  authIdentities        CustomerAuthIdentity[]
+  wallet                Wallet?
+  walletTransactions    WalletTransaction[]
+  paymentOrders         PaymentOrder[]
+  consultations         Consultation[]
+  reviews               Review[]
+  birthCharts           BirthChart[]
+  notifications         Notification[]          @relation("CustomerNotifications")
+  orders                Order[]
+  kundliProfiles        KundliProfile[]
+  addresses             CustomerAddress[]
+  supportTickets        SupportTicket[]
+  couponRedemptions     CouponRedemption[]
+  referralRewardsSent   ReferralReward[]        @relation("ReferralReferrer")
+  referralRewardsReceived ReferralReward[]      @relation("ReferralReferee")
+  astrologerFollows     AstrologerFollower[]
+  astrologerBlocks      AstrologerBlock[]
+  kundliMatches         KundliMatch[]
+  pujaBookings          PujaBooking[]
+
+  @@map("customers")
+}
+
+model CustomerAuthIdentity {
+  id             String    @id @default(uuid())
+  customerId     String
+  providerKey    String
+  providerUserId String
+  passwordHash   String?
+  lastUsedAt     DateTime? @db.Timestamptz
+  createdAt      DateTime  @default(now()) @db.Timestamptz
+
+  customer       Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([providerKey, providerUserId])
+  @@map("customerAuthIdentities")
+}
+
+// ── Astrologers ───────────────────────────────────────────────────────────────
+
+model Astrologer {
+  id                       String    @id @default(uuid())
+  phone                    String?   @unique
+  email                    String?   @unique
+  emailVerified            Boolean   @default(false)
+  displayName              String
+  legalName                String?
+  bio                      String?
+  profileImageKey          String?
+  languages                String[]  @default([])
+  specialties              String[]  @default([])
+  experienceYears          Int       @default(0)
+  pricePerMinChat          Float
+  pricePerMinCall          Float
+  pricePerMinVideo         Float
+  isOnline                 Boolean   @default(false)
+  isBusy                   Boolean   @default(false)
+  isVerified               Boolean   @default(false)
+  ratingAvg                Decimal   @default(0) @db.Decimal(3, 2)
+  ratingCount              Int       @default(0)
+  totalConsultations       Int       @default(0)
+  totalEarnings            Float     @default(0)
+  kycStatus                String    @default("pending")
+  panNumber                String?
+  aadhaarLast4             String?
+  upiId                    String?
+  kycDocsRef               Json?
+  bankAccountRef           Json?
+  commissionPct            Decimal   @default(30.00) @db.Decimal(5, 2)
+  appleId                  String?   @unique
+  isBlocked                Boolean   @default(false)
+  blockedReason            String?
+  registrationCity         String?
+  registrationState        String?
+  registrationCountry      String?
+  registrationCountryCode  String?
+  whatsappNumber           String?
+  dob                      String?
+  astroblessCategory       String?
+  primarySkill             String?
+  pricePerMinCallUsd       Float?
+  pricePerMinVideoUsd      Float?
+  pricePerReport           Float?
+  pricePerReportUsd        Float?
+  onboardingReason         String?
+  interviewTime            String?
+  currentCity              String?
+  otherBusinessSource      String?
+  highestQualification     String?
+  degreeDiploma            String?
+  collegeUniversity        String?
+  astrologySources         String?
+  instagramUrl             String?
+  facebookUrl              String?
+  linkedinUrl              String?
+  youtubeUrl               String?
+  availability             Json?
+  createdAt                DateTime  @default(now()) @db.Timestamptz
+  updatedAt                DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  authIdentities           AstrologerAuthIdentity[]
+  consultations            Consultation[]
+  reviews                  Review[]
+  earnings                 AstrologerEarning[]
+  payouts                  Payout[]
+  followers                AstrologerFollower[]
+  blockedBy                AstrologerBlock[]
+  pujaSlots                PujaSlot[]
+  pujaBookings             PujaBooking[]
+
+  @@map("astrologers")
+}
+
+model AstrologerAuthIdentity {
+  id             String     @id @default(uuid())
+  astrologerId   String
+  providerKey    String
+  providerUserId String
+  passwordHash   String?
+  lastUsedAt     DateTime?  @db.Timestamptz
+  createdAt      DateTime   @default(now()) @db.Timestamptz
+
+  astrologer     Astrologer @relation(fields: [astrologerId], references: [id], onDelete: Cascade)
+
+  @@unique([providerKey, providerUserId])
+  @@map("astrologerAuthIdentities")
+}
+
+// ── Admins ────────────────────────────────────────────────────────────────────
+
+model Admin {
+  id                String    @id @default(uuid())
+  email             String    @unique
+  passwordHash      String?
+  name              String
+  role              String
+  phone             String?   @unique
+  isActive          Boolean   @default(true)
+  lastLoginAt       DateTime? @db.Timestamptz
+  customPermissions String[]  @default([])
+  createdAt         DateTime  @default(now()) @db.Timestamptz
+  updatedAt         DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  exportJobs        ExportJob[]
+  appSettings       AppSetting[]
+  customRolesCreated AdminCustomRole[] @relation("RoleCreator")
+  assignedTickets   SupportTicket[]   @relation("SupportAssignedAdmin")
+
+  @@map("admins")
+}
+
+// ── Auth sessions (shared) ────────────────────────────────────────────────────
+
+model AuthSession {
+  id               String    @id @default(uuid())
+  audience         String
+  subjectId        String
+  sessionId        String
+  refreshTokenHash String
+  userAgent        String?
+  ipAddress        String?
+  deviceId         String?
+  deviceModel      String?
+  deviceName       String?
+  osName           String?
+  osVersion        String?
+  issuedAt         DateTime  @default(now()) @db.Timestamptz
+  expiresAt        DateTime  @db.Timestamptz
+  revokedAt        DateTime? @db.Timestamptz
+  revokedReason    String?
+  replacedBy       String?
+
+  @@index([audience, subjectId], name: "idx_authSessions_audience_subjectId")
+  @@map("authSessions")
+}
+
+// ── Wallet & transactions ─────────────────────────────────────────────────────
+
+model Wallet {
+  id         String    @id @default(uuid())
+  customerId String    @unique
+  balance    Float     @default(0)
+  locked     Float     @default(0)
+  currency   String    @default("INR")
+  updatedAt  DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  customer   Customer  @relation(fields: [customerId], references: [id])
+  transactions WalletTransaction[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id              String    @id @default(uuid())
+  walletId        String
+  customerId      String
+  type            String
+  direction       String
+  amount          Float
+  balanceAfter    Float
+  referenceType   String?
+  referenceId     String?
+  idempotencyKey  String?   @unique
+  notes           String?
+  traceId         String?
+  createdAt       DateTime  @default(now()) @db.Timestamptz
+
+  wallet          Wallet    @relation(fields: [walletId], references: [id])
+  customer        Customer  @relation(fields: [customerId], references: [id])
+
+  @@index([customerId, createdAt(sort: Desc)], name: "idx_walletTransactions_customerId_createdAt")
+  @@map("walletTransactions")
+}
+
+model PaymentOrder {
+  id                String    @id @default(uuid())
+  customerId        String
+  providerKey       String
+  providerOrderId   String?
+  providerPaymentId String?
+  amount            Float
+  currency          String    @default("INR")
+  status            String
+  idempotencyKey    String    @unique
+  clientPayload     String?
+  webhookPayload    String?
+  failureReason     String?
+  expiresAt         DateTime? @db.Timestamptz
+  paidAt            DateTime? @db.Timestamptz
+  traceId           String?
+  createdAt         DateTime  @default(now()) @db.Timestamptz
+  updatedAt         DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  customer          Customer  @relation(fields: [customerId], references: [id])
+  orders            Order[]
+
+  @@map("paymentOrders")
+}
+
+// ── Consultations ─────────────────────────────────────────────────────────────
+
+model Consultation {
+  id                String    @id @default(uuid())
+  customerId        String
+  astrologerId      String
+  type              String
+  status            String
+  pricePerMin       Float
+  commissionPct     Decimal   @db.Decimal(5, 2)
+  requestedAt       DateTime  @default(now()) @db.Timestamptz
+  acceptedAt        DateTime? @db.Timestamptz
+  startedAt         DateTime? @db.Timestamptz
+  endedAt           DateTime? @db.Timestamptz
+  durationSeconds   Int       @default(0)
+  totalCharged      Float     @default(0)
+  astrologerEarning Float     @default(0)
+  platformEarning   Float     @default(0)
+  endReason         String?
+  agoraChannelName  String?
+  recordingKey      String?
+  recordingExpiresAt DateTime? @db.Timestamptz
+  lastHeartbeatAt   DateTime? @db.Timestamptz
+  traceId           String?
+  createdAt         DateTime  @default(now()) @db.Timestamptz
+
+  customer          Customer   @relation(fields: [customerId], references: [id])
+  astrologer        Astrologer @relation(fields: [astrologerId], references: [id])
+  messages          Message[]
+  review            Review?
+  earnings          AstrologerEarning[]
+
+  @@index([customerId], name: "idx_consultations_customerId")
+  @@index([astrologerId], name: "idx_consultations_astrologerId")
+  @@index([status], name: "idx_consultations_status")
+  @@map("consultations")
+}
+
+model Message {
+  id             String    @id @default(uuid())
+  consultationId String
+  senderType     String
+  senderId       String?
+  type           String
+  body           String?
+  mediaKey       String?
+  clientMsgId    String?
+  isFlagged      Boolean   @default(false)
+  readAt         DateTime? @db.Timestamptz
+  createdAt      DateTime  @default(now()) @db.Timestamptz
+
+  consultation   Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+
+  @@unique([consultationId, clientMsgId])
+  @@index([consultationId, createdAt(sort: Desc)], name: "idx_messages_consultationId_createdAt")
+  @@map("messages")
+}
+
+model Review {
+  id             String    @id @default(uuid())
+  consultationId String    @unique
+  customerId     String
+  astrologerId   String
+  rating         Int
+  comment        String?
+  isHidden       Boolean   @default(false)
+  createdAt      DateTime  @default(now()) @db.Timestamptz
+
+  consultation   Consultation @relation(fields: [consultationId], references: [id])
+  customer       Customer     @relation(fields: [customerId], references: [id])
+  astrologer     Astrologer   @relation(fields: [astrologerId], references: [id])
+
+  @@map("reviews")
+}
+
+model AstrologerEarning {
+  id              String    @id @default(uuid())
+  astrologerId    String
+  consultationId  String
+  gross           Float
+  commissionPct   Decimal   @db.Decimal(5, 2)
+  commission      Float
+  net             Float
+  settledPayoutId String?
+  createdAt       DateTime  @default(now()) @db.Timestamptz
+
+  astrologer      Astrologer   @relation(fields: [astrologerId], references: [id])
+  consultation    Consultation @relation(fields: [consultationId], references: [id])
+
+  @@map("astrologerEarnings")
+}
+
+model Payout {
+  id               String    @id @default(uuid())
+  astrologerId     String
+  providerKey      String
+  providerPayoutId String?
+  amount           Float
+  status           String
+  periodStart      DateTime  @db.Timestamptz
+  periodEnd        DateTime  @db.Timestamptz
+  idempotencyKey   String    @unique
+  failureReason    String?
+  processedAt      DateTime? @db.Timestamptz
+  createdAt        DateTime  @default(now()) @db.Timestamptz
+  updatedAt        DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  astrologer       Astrologer @relation(fields: [astrologerId], references: [id])
+
+  @@map("payouts")
+}
+
+// ── AstroMall ─────────────────────────────────────────────────────────────────
+
+model Product {
+  id          String    @id @default(uuid())
+  sku         String    @unique
+  title       String
+  description String?
+  price       Float
+  category    String?
+  imageKeys   String[]  @default([])
+  stock       Int       @default(0)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @db.Timestamptz
+
+  orderItems  OrderItem[]
+
+  @@map("products")
+}
+
+model Order {
+  id              String    @id @default(uuid())
+  customerId      String
+  total           Float
+  status          String
+  shippingAddress Json?
+  paymentOrderId  String?
+  createdAt       DateTime  @default(now()) @db.Timestamptz
+  updatedAt       DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  customer        Customer     @relation(fields: [customerId], references: [id])
+  paymentOrder    PaymentOrder? @relation(fields: [paymentOrderId], references: [id])
+  items           OrderItem[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id         String  @id @default(uuid())
+  orderId    String
+  productId  String
+  qty        Int
+  price      Float
+
+  order      Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product    Product @relation(fields: [productId], references: [id])
+
+  @@map("orderItems")
+}
+
+// ── Content ───────────────────────────────────────────────────────────────────
+
+model BirthChart {
+  id          String   @id @default(uuid())
+  customerId  String
+  chartData   Json
+  computedAt  DateTime @default(now()) @db.Timestamptz
+
+  customer    Customer @relation(fields: [customerId], references: [id])
+
+  @@map("birthCharts")
+}
+
+model Notification {
+  id            String    @id @default(uuid())
+  recipientType String
+  recipientId   String
+  type          String
+  title         String
+  body          String?
+  data          Json?
+  readAt        DateTime? @db.Timestamptz
+  createdAt     DateTime  @default(now()) @db.Timestamptz
+
+  customer      Customer? @relation("CustomerNotifications", fields: [recipientId], references: [id], map: "fk_notifications_customer")
+
+  @@index([recipientType, recipientId, createdAt(sort: Desc)], name: "idx_notifications_recipient")
+  @@map("notifications")
+}
+
+model FcmToken {
+  id          String   @id @default(uuid())
+  ownerType   String
+  ownerId     String
+  token       String   @unique
+  platform    String
+  lastSeenAt  DateTime @default(now()) @db.Timestamptz
+  createdAt   DateTime @default(now()) @db.Timestamptz
+
+  @@index([ownerType, ownerId], name: "idx_fcmTokens_owner")
+  @@map("fcmTokens")
+}
+
+model Horoscope {
+  id           String    @id @default(uuid())
+  sign         String
+  period       String    @default("daily")
+  periodKey    String
+  date         String    @default("")
+  content      String    @default("")
+  sections     Json?
+  luckyColor   String?
+  luckyNumber  String?
+  luckyDay     String?
+  source       String    @default("manual")
+  isPublished  Boolean   @default(false)
+  generatedAt  DateTime? @db.Timestamptz
+  createdAt    DateTime  @default(now()) @db.Timestamptz
+  updatedAt    DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  @@index([sign, period, periodKey], name: "idx_horoscopes_sign_period_periodKey")
+  @@index([period, periodKey], name: "idx_horoscopes_period_periodKey")
+  @@index([isPublished, period, periodKey], name: "idx_horoscopes_published")
+  @@map("horoscopes")
+}
+
+model KundliProfile {
+  id              String    @id @default(uuid())
+  customerId      String
+  label           String
+  birthDate       String
+  birthTime       String?
+  birthPlace      String
+  birthLat        String
+  birthLng        String
+  timezoneOffset  String    @default("5.5")
+  chartData       Json?
+  chartComputedAt DateTime? @db.Timestamptz
+  createdAt       DateTime  @default(now()) @db.Timestamptz
+  updatedAt       DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  customer        Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  matchesAsA      KundliMatch[] @relation("KundliMatchA")
+  matchesAsB      KundliMatch[] @relation("KundliMatchB")
+
+  @@index([customerId], name: "idx_kundliProfiles_customerId")
+  @@map("kundliProfiles")
+}
+
+// ── Apple credentials ─────────────────────────────────────────────────────────
+
+model AppleCredential {
+  id        String   @id @default(uuid())
+  appleId   String   @unique
+  email     String?
+  name      String?
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  @@map("appleCredentials")
+}
+
+// ── Observability ─────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id          String    @id @default(uuid())
+  actorType   String
+  actorId     String?
+  action      String
+  targetType  String?
+  targetId    String?
+  summary     String
+  beforeState Json?
+  afterState  Json?
+  metadata    Json?
+  traceId     String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz
+
+  @@index([actorType, actorId, createdAt(sort: Desc)], name: "idx_auditLog_actorId_createdAt")
+  @@index([targetType, targetId], name: "idx_auditLog_targetId")
+  @@index([action], name: "idx_auditLog_action")
+  @@index([traceId], name: "idx_auditLog_traceId")
+  @@map("auditLog")
+}
+
+model SystemError {
+  id              String    @id @default(uuid())
+  traceId         String?
+  errorCode       String?
+  errorName       String
+  errorMessage    String
+  stackTrace      String?
+  severity        String
+  source          String
+  sourceDetail    String?
+  audience        String?
+  actorType       String?
+  actorId         String?
+  httpMethod      String?
+  httpPath        String?
+  httpStatusCode  Int?
+  requestId       String?
+  serverHostname  String?
+  serverRegion    String?
+  appVersion      String?
+  platform        String?
+  environment     String
+  metadata        Json?
+  fingerprint     String
+  occurrenceCount Int       @default(1)
+  firstSeenAt     DateTime  @default(now()) @db.Timestamptz
+  lastSeenAt      DateTime  @default(now()) @db.Timestamptz
+  isResolved      Boolean   @default(false)
+  resolvedBy      String?
+  resolvedAt      DateTime? @db.Timestamptz
+  resolutionNote  String?
+  sentryEventId   String?
+  createdAt       DateTime  @default(now()) @db.Timestamptz
+
+  @@index([fingerprint], name: "idx_systemErrors_fingerprint")
+  @@index([createdAt(sort: Desc)], name: "idx_systemErrors_createdAt")
+  @@index([severity], name: "idx_systemErrors_severity")
+  @@index([isResolved, lastSeenAt(sort: Desc)], name: "idx_systemErrors_isResolved")
+  @@index([source], name: "idx_systemErrors_source")
+  @@map("systemErrors")
+}
+
+// ── Admin extras ──────────────────────────────────────────────────────────────
+
+model AppSetting {
+  key         String    @id
+  value       Json
+  description String?
+  category    String?
+  isSensitive Boolean   @default(false)
+  updatedBy   String?
+  updatedAt   DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  admin       Admin?    @relation(fields: [updatedBy], references: [id])
+
+  @@map("appSettings")
+}
+
+model ExportJob {
+  id           String    @id @default(uuid())
+  requestedBy  String
+  resource     String
+  format       String
+  filters      Json?
+  status       String
+  totalRows    Int?
+  fileUrl      String?
+  fileSizeBytes BigInt?
+  errorMessage String?
+  expiresAt    DateTime? @db.Timestamptz
+  createdAt    DateTime  @default(now()) @db.Timestamptz
+  completedAt  DateTime? @db.Timestamptz
+
+  admin        Admin     @relation(fields: [requestedBy], references: [id])
+
+  @@map("exportJobs")
+}
+
+model CronRun {
+  id           String    @id @default(uuid())
+  jobName      String
+  status       String
+  startedAt    DateTime  @db.Timestamptz
+  finishedAt   DateTime? @db.Timestamptz
+  durationMs   Int?
+  errorMessage String?
+  traceId      String?
+  createdAt    DateTime  @default(now()) @db.Timestamptz
+
+  @@index([jobName, startedAt(sort: Desc)], name: "idx_cronRuns_jobName_startedAt")
+  @@map("cronRuns")
+}
+
+model AdminCustomRole {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?
+  permissions String[] @default([])
+  isSystem    Boolean  @default(false)
+  createdBy   String?
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  creator     Admin?   @relation("RoleCreator", fields: [createdBy], references: [id])
+
+  @@index([slug], name: "idx_adminCustomRoles_slug")
+  @@map("adminCustomRoles")
+}
+
+// ── Followers & blocks ────────────────────────────────────────────────────────
+
+model AstrologerFollower {
+  customerId   String
+  astrologerId String
+  createdAt    DateTime @default(now()) @db.Timestamptz
+
+  customer     Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  astrologer   Astrologer @relation(fields: [astrologerId], references: [id], onDelete: Cascade)
+
+  @@id([customerId, astrologerId])
+  @@index([astrologerId], name: "idx_astrologerFollowers_astrologerId")
+  @@map("astrologerFollowers")
+}
+
+model AstrologerBlock {
+  id           String   @id @default(uuid())
+  customerId   String
+  astrologerId String
+  reason       String?
+  createdAt    DateTime @default(now()) @db.Timestamptz
+
+  customer     Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  astrologer   Astrologer @relation(fields: [astrologerId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, astrologerId])
+  @@index([astrologerId], name: "idx_astrologerBlocks_astrologerId")
+  @@map("astrologerBlocks")
+}
+
+// ── Referral rewards ──────────────────────────────────────────────────────────
+
+model ReferralReward {
+  id           String   @id @default(uuid())
+  referrerId   String
+  refereeId    String
+  triggerEvent String                    // 'signup' | 'firstTopup' | 'firstConsultation'
+  amount  Float
+  status       String   @default("pending") // pending | credited | expired
+  creditedAt   DateTime? @db.Timestamptz
+  createdAt    DateTime @default(now()) @db.Timestamptz
+
+  referrer     Customer @relation("ReferralReferrer", fields: [referrerId], references: [id])
+  referee      Customer @relation("ReferralReferee",  fields: [refereeId],  references: [id])
+
+  @@index([referrerId], name: "idx_referralRewards_referrerId")
+  @@index([refereeId],  name: "idx_referralRewards_refereeId")
+  @@map("referralRewards")
+}
+
+// ── Recharge packs ────────────────────────────────────────────────────────────
+
+model RechargePack {
+  id          String   @id @default(uuid())
+  label       String
+  amount Float
+  bonus  Float   @default(0)
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  @@map("rechargePacks")
+}
+
+// ── Coupons ───────────────────────────────────────────────────────────────────
+
+model Coupon {
+  id                String   @id @default(uuid())
+  code              String   @unique
+  type              String                     // 'flat' | 'percent'
+  value             Float?                     // flat discount amount
+  valuePercent      Decimal? @db.Decimal(5, 2) // percent discount
+  maxDiscount       Float?                     // cap for percent coupons
+  minAmount         Float?                     // minimum topup to apply
+  validFrom         DateTime @db.Timestamptz
+  validTo           DateTime @db.Timestamptz
+  usageLimit        Int?                       // null = unlimited
+  perCustomerLimit  Int      @default(1)
+  usedCount         Int      @default(0)
+  isActive          Boolean  @default(true)
+  description       String?
+  createdAt         DateTime @default(now()) @db.Timestamptz
+  updatedAt         DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  redemptions       CouponRedemption[]
+
+  @@index([code],    name: "idx_coupons_code")
+  @@index([validTo], name: "idx_coupons_validTo")
+  @@map("coupons")
+}
+
+model CouponRedemption {
+  id             String   @id @default(uuid())
+  couponId       String
+  customerId     String
+  paymentOrderId String?
+  discount  Float
+  redeemedAt     DateTime @default(now()) @db.Timestamptz
+
+  coupon         Coupon       @relation(fields: [couponId],   references: [id])
+  customer       Customer     @relation(fields: [customerId], references: [id])
+
+  @@unique([couponId, customerId])           // perCustomerLimit=1 enforced here for simple case
+  @@index([customerId], name: "idx_couponRedemptions_customerId")
+  @@map("couponRedemptions")
+}
+
+// ── Customer addresses ────────────────────────────────────────────────────────
+
+model CustomerAddress {
+  id         String   @id @default(uuid())
+  customerId String
+  label      String   @default("Home")      // 'Home' | 'Work' | 'Other'
+  name       String
+  phone      String
+  line1      String
+  line2      String?
+  city       String
+  state      String
+  country    String   @default("IN")
+  pincode    String
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now()) @db.Timestamptz
+  updatedAt  DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId], name: "idx_customerAddresses_customerId")
+  @@map("customerAddresses")
+}
+
+// ── Support tickets ───────────────────────────────────────────────────────────
+
+model SupportTicket {
+  id              String    @id @default(uuid())
+  ticketNumber    String    @unique
+  submitterType   String                         // 'customer' | 'astrologer'
+  submitterId     String
+  category        String                         // 'payment' | 'consultation' | 'kyc' | 'puja' | 'order' | 'general'
+  priority        String    @default("normal")   // low | normal | high | urgent
+  subject         String
+  description     String
+  attachmentKeys  String[]  @default([])
+  linkedConsultationId String?
+  linkedOrderId        String?
+  linkedPaymentOrderId String?
+  status          String    @default("open")     // open | inProgress | waitingOnUser | resolved | closed
+  assignedToId    String?
+  resolvedAt      DateTime? @db.Timestamptz
+  resolvedById    String?
+  createdAt       DateTime  @default(now()) @db.Timestamptz
+  updatedAt       DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  customer        Customer? @relation(fields: [submitterId], references: [id], map: "fk_supportTickets_customer")
+  assignedAdmin   Admin?    @relation("SupportAssignedAdmin", fields: [assignedToId], references: [id], map: "fk_supportTickets_admin")
+  messages        SupportTicketMessage[]
+
+  @@index([submitterType, submitterId], name: "idx_supportTickets_submitter")
+  @@index([status],                     name: "idx_supportTickets_status")
+  @@index([assignedToId],               name: "idx_supportTickets_assignedTo")
+  @@map("supportTickets")
+}
+
+model SupportTicketMessage {
+  id              String   @id @default(uuid())
+  ticketId        String
+  authorType      String                         // 'customer' | 'astrologer' | 'admin' | 'system'
+  authorId        String?
+  body            String
+  attachmentKeys  String[] @default([])
+  isInternalNote  Boolean  @default(false)
+  createdAt       DateTime @default(now()) @db.Timestamptz
+
+  ticket          SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt(sort: Asc)], name: "idx_supportTicketMessages_ticketId")
+  @@map("supportTicketMessages")
+}
+
+// ── Banners ───────────────────────────────────────────────────────────────────
+
+model Banner {
+  id          String   @id @default(uuid())
+  title       String
+  imageKey    String
+  ctaType     String                             // 'astrologerProfile' | 'pujaTemplate' | 'product' | 'externalUrl' | 'category' | 'horoscope'
+  ctaTarget   String
+  placement   String                             // 'home' | 'astrologerListTop' | 'walletScreen' | 'pujaList'
+  audience    Json?                              // { genders, minAge, maxAge, languages, cities }
+  priority    Int      @default(0)
+  startsAt    DateTime @db.Timestamptz
+  endsAt      DateTime @db.Timestamptz
+  isActive    Boolean  @default(true)
+  viewCount   BigInt   @default(0)
+  tapCount    BigInt   @default(0)
+  createdBy   String?
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  @@index([placement, isActive, startsAt], name: "idx_banners_placement_active")
+  @@map("banners")
+}
+
+// ── Kundli matching ───────────────────────────────────────────────────────────
+
+model KundliMatch {
+  id           String   @id @default(uuid())
+  customerId   String
+  profileAId   String
+  profileBId   String
+  scorePoints  Int
+  scoreLabel   String?                           // 'Excellent' | 'Good' | 'Average' | 'Poor'
+  breakdown    Json
+  computedAt   DateTime @default(now()) @db.Timestamptz
+  createdAt    DateTime @default(now()) @db.Timestamptz
+
+  customer     Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  profileA     KundliProfile @relation("KundliMatchA", fields: [profileAId], references: [id])
+  profileB     KundliProfile @relation("KundliMatchB", fields: [profileBId], references: [id])
+
+  @@index([customerId], name: "idx_kundliMatches_customerId")
+  @@map("kundliMatches")
+}
+
+// ── Puja ──────────────────────────────────────────────────────────────────────
+
+model PujaTemplate {
+  id               String   @id @default(uuid())
+  slug             String   @unique
+  title            String
+  subtitle         String?
+  description      String?
+  category         String?                       // 'shanti' | 'graha' | 'special-occasion'
+  deity            String?
+  occasions        String[] @default([])
+  durationMinutes  Int
+  basePrice   Float
+  imageKey         String?
+  galleryKeys      String[] @default([])
+  videoKey         String?
+  benefits         String[] @default([])
+  rituals          Json?
+  samagriIncluded  Json?
+  samagriRequired  Json?
+  isActive         Boolean  @default(true)
+  sortOrder        Int      @default(0)
+  createdAt        DateTime @default(now()) @db.Timestamptz
+  updatedAt        DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  packageTiers     PujaPackageTier[]
+  slots            PujaSlot[]
+  bookings         PujaBooking[]
+
+  @@map("pujaTemplates")
+}
+
+model PujaPackageTier {
+  id              String       @id @default(uuid())
+  pujaTemplateId  String
+  name            String
+  price      Float
+  inclusions      String[]     @default([])
+  maxParticipants Int?
+  sortOrder       Int          @default(0)
+
+  template        PujaTemplate @relation(fields: [pujaTemplateId], references: [id], onDelete: Cascade)
+  bookings        PujaBooking[]
+
+  @@index([pujaTemplateId], name: "idx_pujaPackageTiers_templateId")
+  @@map("pujaPackageTiers")
+}
+
+model PujaSlot {
+  id              String       @id @default(uuid())
+  pujaTemplateId  String
+  astrologerId    String?
+  scheduledAt     DateTime     @db.Timestamptz
+  timezone        String       @default("Asia/Kolkata")
+  capacity        Int          @default(1)
+  bookedCount     Int          @default(0)
+  status          String       @default("open")  // open | full | cancelled | completed
+  isLiveStreamed  Boolean      @default(false)
+  agoraChannelName String?
+  createdAt       DateTime     @default(now()) @db.Timestamptz
+  updatedAt       DateTime     @default(now()) @updatedAt @db.Timestamptz
+
+  template        PujaTemplate  @relation(fields: [pujaTemplateId], references: [id])
+  astrologer      Astrologer?   @relation(fields: [astrologerId],  references: [id])
+  bookings        PujaBooking[]
+
+  @@index([scheduledAt],    name: "idx_pujaSlots_scheduledAt")
+  @@index([pujaTemplateId], name: "idx_pujaSlots_templateId")
+  @@map("pujaSlots")
+}
+
+model PujaBooking {
+  id                   String    @id @default(uuid())
+  bookingNumber        String    @unique
+  customerId           String
+  astrologerId         String?
+  pujaTemplateId       String
+  pujaPackageTierId    String?
+  pujaSlotId           String?
+  scheduledAt          DateTime  @db.Timestamptz
+  amount               Float
+  paymentMethod        String                        // 'wallet' | 'provider'
+  paymentOrderId       String?
+  walletTransactionId  String?
+  status               String    @default("pending") // pending | confirmed | inProgress | completed | cancelled | refunded
+  devoteeName          String
+  gotra                String?
+  specialRequests      String?
+  deliveryAddress      Json?
+  liveStreamLink       String?
+  recordingKey         String?
+  completedAt          DateTime? @db.Timestamptz
+  cancelledAt          DateTime? @db.Timestamptz
+  cancelReason         String?
+  createdAt            DateTime  @default(now()) @db.Timestamptz
+  updatedAt            DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  customer             Customer         @relation(fields: [customerId],        references: [id])
+  astrologer           Astrologer?      @relation(fields: [astrologerId],      references: [id])
+  template             PujaTemplate     @relation(fields: [pujaTemplateId],    references: [id])
+  packageTier          PujaPackageTier? @relation(fields: [pujaPackageTierId], references: [id])
+  slot                 PujaSlot?        @relation(fields: [pujaSlotId],        references: [id])
+
+  @@index([customerId],  name: "idx_pujaBookings_customerId")
+  @@index([status],      name: "idx_pujaBookings_status")
+  @@index([scheduledAt], name: "idx_pujaBookings_scheduledAt")
+  @@map("pujaBookings")
+}
+
+// ── Articles ──────────────────────────────────────────────────────────────────
+
+model Article {
+  id           String    @id @default(uuid())
+  slug         String    @unique
+  title        String
+  subtitle     String?
+  coverImageKey String?
+  body         String    @default("")
+  category     String?
+  tags         String[]  @default([])
+  language     String    @default("en")
+  authorName   String?
+  isPublished  Boolean   @default(false)
+  publishedAt  DateTime? @db.Timestamptz
+  viewCount    BigInt    @default(0)
+  createdBy    String?
+  createdAt    DateTime  @default(now()) @db.Timestamptz
+  updatedAt    DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  @@index([isPublished, publishedAt(sort: Desc)], name: "idx_articles_published")
+  @@index([category], name: "idx_articles_category")
+  @@map("articles")
+}
+
+// ── Languages ─────────────────────────────────────────────────────────────────
+
+model Language {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  nativeName String?
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  @@index([isActive, sortOrder], name: "idx_languages_active_order")
+  @@map("languages")
+}
+
+// ── Skills ────────────────────────────────────────────────────────────────────
+
+model Skill {
+  id          String   @id @default(uuid())
+  slug        String   @unique
+  name        String
+  description String?
+  category    String?
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  @@index([isActive, sortOrder], name: "idx_skills_active_order")
+  @@index([category], name: "idx_skills_category")
+  @@map("skills")
+}

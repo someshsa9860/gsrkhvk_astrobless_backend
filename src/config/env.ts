@@ -92,12 +92,10 @@ const envSchema = z.object({
   // Anthropic Claude
   ANTHROPIC_API_KEY: z.string().default(''),
 
-  // VedicAstroAPI (astrologyapi.com) — free tier: 100 calls/day
-  // Sign up at https://astrologyapi.com → Dashboard → API Credentials
-  // userId: numeric user ID; apiKey: your secret key
-  VEDIC_ASTRO_API_USER_ID: z.string().default(''),
+  // VedicAstroAPI (vedicastroapi.com v3-json) — 500 calls/day on free tier
+  // Sign up at https://vedicastroapi.com → Dashboard → API Credentials
+  // Auth: ?api_key=YOUR_API_KEY query param — no userId needed
   VEDIC_ASTRO_API_KEY: z.string().default(''),
-  VEDIC_ASTRO_API_BASE_URL: z.string().default('https://json.astrologyapi.com/v1'),
 
   // Observability
   SENTRY_DSN: z.string().default(''),

@@ -1,15 +1,23 @@
-import { drizzle } from 'drizzle-orm/postgres-js';
-import postgres from 'postgres';
+import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { Pool } from 'pg';
 import { env } from '../config/env.js';
-import * as schema from './schema/index.js';
 
-const queryClient = postgres(env.DATABASE_URL, {
+const pool = new Pool({
+  connectionString: env.DATABASE_URL,
   max: 20,
-  idle_timeout: 30,
-  connect_timeout: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
 });
 
-export const db = drizzle(queryClient, { schema });
+const adapter = new PrismaPg(pool);
 
-export type Db = typeof db;
-export type DbTransaction = Parameters<Parameters<Db['transaction']>[0]>[0];
+export const prisma = new PrismaClient({ adapter });
+
+export type PrismaTransaction = Omit<
+  PrismaClient,
+  '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'
+>;
+
+// Legacy alias so existing `import { db } from '../../db/client.js'` still compiles
+export const db = prisma;

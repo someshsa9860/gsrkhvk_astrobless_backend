@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const UpdateAstrologerProfileSchema = z.object({
   displayName: z.string().min(1).optional(),
   bio: z.string().optional(),
-  profileImageUrl: z.string().url().optional(),
+  profileImageKey: z.string().optional(),
   languages: z.array(z.string()).optional(),
   specialties: z.array(z.string()).optional(),
   experienceYears: z.number().int().min(0).optional(),
@@ -17,7 +17,7 @@ export const SearchAstrologersQuerySchema = z.object({
   specialty: z.string().optional(),
   language: z.string().optional(),
   minRating: z.coerce.number().min(1).max(5).optional(),
-  maxPricePerMinPaise: z.coerce.number().optional(),
+  maxPricePerMin: z.coerce.number().optional(),
   isOnline: z.coerce.boolean().optional(),
   sort: z.enum(['rating', 'price', 'experience', 'consultations']).default('rating'),
   order: z.enum(['asc', 'desc']).default('desc'),

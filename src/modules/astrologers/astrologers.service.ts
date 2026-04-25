@@ -1,7 +1,7 @@
 import * as repo from './astrologers.repository.js';
 import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../observability/auditLogger.js';
-import type { Astrologer } from '../../db/schema/astrologers.js';
+import type { Astrologer } from '@prisma/client';
 import type { z } from 'zod';
 import type { UpdateAstrologerProfileSchema, SearchAstrologersQuerySchema } from './astrologers.schema.js';
 

@@ -1,26 +1,23 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq } from 'drizzle-orm';
-import { db } from '../../db/client.js';
+import { prisma } from '../../db/client.js';
 import * as repo from './consultations.repository.js';
-import { astrologers } from '../../db/schema/astrologers.js';
 import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../observability/auditLogger.js';
 import { reportError } from '../../observability/errorReporter.js';
 import { startBillingTicker, stopBillingTicker } from './billingTicker.js';
 import { consultationDuration } from '../../lib/metrics.js';
-import type { Consultation, Message } from '../../db/schema/consultations.js';
+import type { Consultation, Message } from '@prisma/client';
 import type { z } from 'zod';
 import type { RequestConsultationSchema, SubmitReviewSchema } from './consultations.schema.js';
 import { tracer } from '../../lib/tracing.js';
 
-// Injected at startup — avoids circular dep
 let emitToSocket: ((room: string, event: string, data: unknown) => void) | null = null;
 export function setSocketEmitter(fn: typeof emitToSocket): void {
   emitToSocket = fn;
 }
 
 export async function requestConsultation(customerId: string, input: z.infer<typeof RequestConsultationSchema>): Promise<Consultation> {
-  const astrologer = await db.query.astrologers.findFirst({ where: eq(astrologers.id, input.astrologerId) });
+  const astrologer = await prisma.astrologer.findFirst({ where: { id: input.astrologerId } });
   if (!astrologer || !astrologer.isVerified || astrologer.isBlocked) throw new AppError('NOT_FOUND', 'Astrologer not available.', 404);
   if (astrologer.isBusy) throw new AppError('ASTROLOGER_BUSY', 'Astrologer is currently busy.', 409);
 
@@ -28,15 +25,17 @@ export async function requestConsultation(customerId: string, input: z.infer<typ
     : input.type === 'video' ? astrologer.pricePerMinVideo
     : astrologer.pricePerMinChat;
 
-  const consultation = await db.transaction(async (tx) => {
-    const c = await repo.create({
-      customerId,
-      astrologerId: input.astrologerId,
-      type: input.type,
-      status: 'requested',
-      pricePerMin,
-      commissionPct: astrologer.commissionPct,
-    }, tx);
+  const consultation = await prisma.$transaction(async (tx) => {
+    const c = await tx.consultation.create({
+      data: {
+        customerId,
+        astrologerId: input.astrologerId,
+        type: input.type,
+        status: 'requested',
+        pricePerMin,
+        commissionPct: astrologer.commissionPct,
+      },
+    });
 
     await writeAuditLog({
       actorType: 'customer',
@@ -66,8 +65,8 @@ export async function acceptConsultation(astrologerId: string, consultationId: s
   if (consultation.astrologerId !== astrologerId) throw new AppError('FORBIDDEN', 'Not your consultation.', 403);
   if (consultation.status !== 'requested') throw new AppError('CONSULTATION_NOT_ACTIVE', 'Consultation cannot be accepted.', 409);
 
-  await db.transaction(async (tx) => {
-    await repo.updateStatus(consultationId, { status: 'accepted', acceptedAt: new Date() }, tx);
+  await prisma.$transaction(async (tx) => {
+    await tx.consultation.update({ where: { id: consultationId }, data: { status: 'accepted', acceptedAt: new Date() } });
     await writeAuditLog({
       actorType: 'astrologer',
       actorId: astrologerId,
@@ -88,8 +87,8 @@ export async function startConsultation(actorId: string, consultationId: string)
   if (!consultation) throw new AppError('NOT_FOUND', 'Consultation not found.', 404);
   if (consultation.status !== 'accepted') throw new AppError('CONSULTATION_NOT_ACTIVE', 'Consultation must be accepted first.', 409);
 
-  await db.transaction(async (tx) => {
-    await repo.updateStatus(consultationId, { status: 'active', startedAt: new Date() }, tx);
+  await prisma.$transaction(async (tx) => {
+    await tx.consultation.update({ where: { id: consultationId }, data: { status: 'active', startedAt: new Date() } });
     await writeAuditLog({
       actorType: consultation.customerId === actorId ? 'customer' : 'astrologer',
       actorId,
@@ -109,7 +108,7 @@ export async function startConsultation(actorId: string, consultationId: string)
       emitToSocket?.(`customer:${consultation.customerId}`, 'billing:tick', {
         consultationId,
         remainingSeconds: secondsLeft,
-        balance: Number(balance),
+        balance,
       });
     },
     async (reason) => {
@@ -134,30 +133,27 @@ export async function endConsultation(actorId: string, consultationId: string, r
   const endedAt = new Date();
   const startedAt = consultation.startedAt ?? endedAt;
   const durationSeconds = Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000);
-  const totalCharged = BigInt(Math.floor(durationSeconds / 60) * consultation.pricePerMin);
+  const totalCharged = Math.floor(durationSeconds / 60) * consultation.pricePerMin;
   const commissionPct = Number(consultation.commissionPct) / 100;
-  const platformPaise = BigInt(Math.round(Number(totalCharged) * commissionPct));
-  const astrologerPaise = totalCharged - platformPaise;
+  const platformEarning = Math.round(totalCharged * commissionPct * 100) / 100;
+  const astrologerEarning = Math.round((totalCharged - platformEarning) * 100) / 100;
 
-  await db.transaction(async (tx) => {
-    await repo.updateStatus(consultationId, {
-      status: 'ended',
-      endedAt,
-      durationSeconds,
-      totalCharged,
-      astrologerEarning: astrologerPaise,
-      platformEarning: platformPaise,
-      endReason: reason,
-    }, tx);
+  await prisma.$transaction(async (tx) => {
+    await tx.consultation.update({
+      where: { id: consultationId },
+      data: { status: 'ended', endedAt, durationSeconds, totalCharged, astrologerEarning, platformEarning, endReason: reason },
+    });
 
-    await repo.insertEarning({
-      astrologerId: consultation.astrologerId,
-      consultationId,
-      gross: totalCharged,
-      commissionPct: consultation.commissionPct,
-      commission: platformPaise,
-      net: astrologerPaise,
-    }, tx);
+    await tx.astrologerEarning.create({
+      data: {
+        astrologerId: consultation.astrologerId,
+        consultationId,
+        gross: totalCharged,
+        commissionPct: consultation.commissionPct,
+        commission: platformEarning,
+        net: astrologerEarning,
+      },
+    });
 
     await writeAuditLog({
       actorType: 'system',
@@ -165,8 +161,8 @@ export async function endConsultation(actorId: string, consultationId: string, r
       action: 'consultation.end',
       targetType: 'consultation',
       targetId: consultationId,
-      summary: `Consultation ended. Duration: ${durationSeconds}s, charged: ₹${Number(totalCharged) / 100}`,
-      afterState: { durationSeconds, totalCharged: Number(totalCharged), reason },
+      summary: `Consultation ended. Duration: ${durationSeconds}s, charged: ${totalCharged}`,
+      afterState: { durationSeconds, totalCharged, reason },
     }, tx);
   });
 
@@ -182,7 +178,16 @@ export async function submitReview(customerId: string, consultationId: string, i
   if (consultation.customerId !== customerId) throw new AppError('FORBIDDEN', 'Not your consultation.', 403);
   if (consultation.status !== 'ended') throw new AppError('CONSULTATION_NOT_ACTIVE', 'Can only review ended consultations.', 409);
 
-  await repo.insertReview({ consultationId, customerId, astrologerId: consultation.astrologerId, ...input });
+  await prisma.review.create({
+    data: {
+      consultationId,
+      customerId,
+      astrologerId: consultation.astrologerId,
+      rating: input.rating,
+      comment: input.comment,
+    },
+  });
+
   await writeAuditLog({
     actorType: 'customer',
     actorId: customerId,

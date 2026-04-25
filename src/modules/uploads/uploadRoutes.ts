@@ -21,6 +21,7 @@ import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { JWT_AUDIENCE } from '../../config/constants.js';
 import { uploadImage, parseUploadFromRequest } from './uploadService.js';
+import { variantKeysToUrls } from '../../lib/storage/index.js';
 import { getStorage } from '../../lib/storage/index.js';
 import { makeTempKey } from '../../lib/tempFile.js';
 import type { ImageCategory } from '../../lib/storage/types.js';
@@ -57,12 +58,10 @@ const PresignQuerySchema = z.object({
 const UploadResponseSchema = z.object({
   ok: z.literal(true),
   data: z.object({
-    variants: z.object({
-      original: z.string(),
-      sm: z.string(),
-      md: z.string(),
-      lg: z.string(),
-    }),
+    // Storage keys — save these to DB
+    keys: z.object({ original: z.string(), sm: z.string(), md: z.string(), lg: z.string() }),
+    // Resolved URLs — use these for immediate preview only, never persist
+    urls: z.object({ original: z.string(), sm: z.string(), md: z.string(), lg: z.string() }),
     prefix: z.string(),
   }),
 });
@@ -126,7 +125,14 @@ async function handleUpload(
     subFolder,
   });
 
-  return reply.send({ ok: true, data: result });
+  return reply.send({
+    ok: true,
+    data: {
+      keys: result.keys,
+      urls: variantKeysToUrls(result.keys),
+      prefix: result.prefix,
+    },
+  });
 }
 
 // ── Route registrations ───────────────────────────────────────────────────────
@@ -230,8 +236,12 @@ export const astrologerUploadRoutes: FastifyPluginAsync = async (app) => {
  * Register this in the Fastify app only when STORAGE_PROVIDER=local.
  */
 export const localPresignUploadRoute: FastifyPluginAsync = async (app) => {
+  // Accept raw binary bodies for all content types on this route (images, PDFs, etc.)
+  app.addContentTypeParser('*', { parseAs: 'buffer' }, (_req, body, done) => {
+    done(null, body);
+  });
+
   app.put('/uploads-presign/:token', {
-    config: { rawBody: true },
     handler: async (req, reply) => {
       const { token } = req.params as { token: string };
       const { localPresignTokens } = await import('../../lib/storage/localProvider.js');

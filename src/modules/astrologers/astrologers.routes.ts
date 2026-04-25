@@ -1,7 +1,9 @@
 import { JWT_AUDIENCE } from '../../config/constants.js';
 import type { FastifyPluginAsync } from 'fastify';
 import * as ctrl from './astrologers.controller.js';
+import * as notifCtrl from './notifications.controller.js';
 import { UpdateAstrologerProfileSchema, SearchAstrologersQuerySchema, SetOnlineStatusSchema } from './astrologers.schema.js';
+import { RegisterFcmTokenSchema, ListNotificationsQuerySchema, MarkReadSchema } from './notifications.schema.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 export const astrologerRoutes: FastifyPluginAsync = async (app) => {
@@ -32,6 +34,59 @@ export const astrologerRoutes: FastifyPluginAsync = async (app) => {
     },
     preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
     handler: ctrl.setOnlineStatus,
+  });
+
+  // ── Notifications ─────────────────────────────────────────────────────────
+  app.get('/v1/astrologer/notifications', {
+    schema: {
+      tags: ['astrologer:notifications'],
+      summary: 'List notifications',
+      security: [{ bearerAuth: [] }],
+      querystring: zodToJsonSchema(ListNotificationsQuerySchema),
+    },
+    preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
+    handler: notifCtrl.listNotifications,
+  });
+
+  app.get('/v1/astrologer/notifications/unread-count', {
+    schema: { tags: ['astrologer:notifications'], summary: 'Get unread notification count', security: [{ bearerAuth: [] }] },
+    preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
+    handler: notifCtrl.getUnreadCount,
+  });
+
+  app.post('/v1/astrologer/notifications/mark-read', {
+    schema: {
+      tags: ['astrologer:notifications'],
+      summary: 'Mark specific notifications as read',
+      security: [{ bearerAuth: [] }],
+      body: zodToJsonSchema(MarkReadSchema),
+    },
+    preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
+    handler: notifCtrl.markRead,
+  });
+
+  app.post('/v1/astrologer/notifications/mark-all-read', {
+    schema: { tags: ['astrologer:notifications'], summary: 'Mark all notifications as read', security: [{ bearerAuth: [] }] },
+    preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
+    handler: notifCtrl.markAllRead,
+  });
+
+  // ── FCM tokens ────────────────────────────────────────────────────────────
+  app.post('/v1/astrologer/fcm-tokens', {
+    schema: {
+      tags: ['astrologer:notifications'],
+      summary: 'Register FCM token',
+      security: [{ bearerAuth: [] }],
+      body: zodToJsonSchema(RegisterFcmTokenSchema),
+    },
+    preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
+    handler: notifCtrl.registerFcmToken,
+  });
+
+  app.delete('/v1/astrologer/fcm-tokens/:token', {
+    schema: { tags: ['astrologer:notifications'], summary: 'Remove FCM token', security: [{ bearerAuth: [] }] },
+    preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
+    handler: notifCtrl.deleteFcmToken,
   });
 
   // ── Customer-facing astrologer discovery ─────────────────────────────────

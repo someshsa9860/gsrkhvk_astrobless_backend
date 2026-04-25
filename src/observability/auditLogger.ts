@@ -1,40 +1,39 @@
-import { db, type DbTransaction } from '../db/client.js';
-import { auditLog } from '../db/schema/observability.js';
+import { prisma, type PrismaTransaction } from '../db/client.js';
 import { getContext } from '../lib/context.js';
 import { logger } from '../lib/logger.js';
 
 export interface AuditLogInput {
   actorType: 'customer' | 'astrologer' | 'admin' | 'system' | 'provider';
   actorId?: string;
-  action: string; // resource.verb — e.g. wallet.topup
+  action: string;
   targetType?: string;
   targetId?: string;
   summary: string;
-  beforeState?: Record<string, unknown>;
-  afterState?: Record<string, unknown>;
+  beforeState?: Record<string, unknown> | null;
+  afterState?: Record<string, unknown> | null;
   metadata?: Record<string, unknown>;
 }
 
-export async function writeAuditLog(input: AuditLogInput, tx?: DbTransaction): Promise<void> {
+export async function writeAuditLog(input: AuditLogInput, tx?: PrismaTransaction): Promise<void> {
   const ctx = getContext();
-  const record = {
-    actorType: input.actorType,
-    actorId: input.actorId ?? ctx.actorId,
-    action: input.action,
-    targetType: input.targetType,
-    targetId: input.targetId,
-    summary: input.summary,
-    beforeState: input.beforeState ?? null,
-    afterState: input.afterState ?? null,
-    metadata: input.metadata ?? null,
-    traceId: ctx.traceId,
-  };
+  const client = tx ?? prisma;
 
   try {
-    const client = tx ?? db;
-    await client.insert(auditLog).values(record);
+    await client.auditLog.create({
+      data: {
+        actorType: input.actorType,
+        actorId: input.actorId ?? ctx.actorId,
+        action: input.action,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        summary: input.summary,
+        beforeState: input.beforeState ?? undefined,
+        afterState: input.afterState ?? undefined,
+        metadata: input.metadata ?? undefined,
+        traceId: ctx.traceId,
+      },
+    });
   } catch (err) {
-    // Audit log failure must never crash the request — log and continue
-    logger.error({ err, record }, 'Failed to write audit log');
+    logger.error({ err }, 'Failed to write audit log');
   }
 }

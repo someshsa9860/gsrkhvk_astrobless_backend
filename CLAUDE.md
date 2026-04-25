@@ -1,5 +1,4 @@
 
-
 ## Non-negotiable rules (re-read every phase)
 
 1. **Follow `CLAUDE.md` exactly.** When in doubt, quote the section and ask.
@@ -8,7 +7,7 @@
 4. **Every state-mutating service method** writes an `auditLog` row with `actorType='admin'`, in the same DB transaction.
 5. **Every catch block** that swallows an error calls `errorReporter.report(...)`.
 6. **Every route** has a complete Zod schema for OpenAPI generation, tagged `admin:{module}`.
-7. **Money is `bigint` paise.** Float for money = instant fail.
+7. **Money is `bigint` integers (1/100 of ₹1).** Float for money = instant fail.
 8. **Every list endpoint** supports: cursor or offset pagination, sort, filter, full-text search, **export trigger** (async to BullMQ).
 9. **Every "create" / "update" / "delete" endpoint** logs before/after states.
 10. **Sensitive admin actions** (payouts, refunds, manual wallet credits, KYC approvals) require a `reason` field that is mandatory, free-text, audited.
@@ -24,88 +23,7 @@ Before each phase, confirm: "I've read CLAUDE.md and the existing modules. Here'
 
 Roles per CLAUDE.md section 19: `superAdmin`, `ops`, `finance`, `support`, `content`. Add a sixth: `analyst` (read-only, dashboards + reports + logs).
 
-Define a permission map:
-
-```typescript
-// packages/sharedConstants/adminPermissions.ts
-export enum AdminPermission {
-  // Dashboard
-  DASHBOARD_VIEW = 'dashboard.view',
-
-  // Astrologers
-  ASTROLOGER_VIEW = 'astrologer.view',
-  ASTROLOGER_KYC_REVIEW = 'astrologer.kycReview',
-  ASTROLOGER_BLOCK = 'astrologer.block',
-  ASTROLOGER_EDIT = 'astrologer.edit',
-  ASTROLOGER_CATEGORY_MANAGE = 'astrologer.categoryManage',
-
-  // Customers
-  CUSTOMER_VIEW = 'customer.view',
-  CUSTOMER_BLOCK = 'customer.block',
-  CUSTOMER_WALLET_ADJUST = 'customer.walletAdjust',
-  CUSTOMER_REFUND = 'customer.refund',
-
-  // Consultations
-  CONSULTATION_VIEW = 'consultation.view',
-  CONSULTATION_TRANSCRIPT_VIEW = 'consultation.transcriptView',
-  CONSULTATION_RECORDING_LISTEN = 'consultation.recordingListen',
-  CONSULTATION_REFUND = 'consultation.refund',
-
-  // Finance
-  PAYMENT_VIEW = 'payment.view',
-  PAYOUT_APPROVE = 'payout.approve',
-  PAYOUT_VIEW = 'payout.view',
-  ASTROLOGER_RECHARGE = 'astrologer.recharge',  // admin credits astrologer wallet/account
-
-  // Content
-  HOROSCOPE_MANAGE = 'horoscope.manage',
-  ARTICLE_MANAGE = 'article.manage',
-  BANNER_MANAGE = 'banner.manage',
-  PUSH_CAMPAIGN_MANAGE = 'pushCampaign.manage',
-
-  // Puja
-  PUJA_MANAGE = 'puja.manage',
-  PUJA_BOOKING_VIEW = 'pujaBooking.view',
-  PUJA_BOOKING_MANAGE = 'pujaBooking.manage',
-
-  // AstroMall
-  PRODUCT_MANAGE = 'product.manage',
-  ORDER_VIEW = 'order.view',
-  ORDER_MANAGE = 'order.manage',
-
-  // Support
-  SUPPORT_TICKET_VIEW = 'support.ticketView',
-  SUPPORT_TICKET_RESPOND = 'support.ticketRespond',
-  FEEDBACK_VIEW = 'feedback.view',
-
-  // Settings
-  SETTINGS_VIEW = 'settings.view',
-  SETTINGS_EDIT = 'settings.edit',
-  COMMISSION_EDIT = 'commission.edit',
-
-  // Observability
-  LOG_VIEW = 'log.view',
-  AUDIT_VIEW = 'audit.view',
-  ERROR_VIEW = 'error.view',
-  ERROR_RESOLVE = 'error.resolve',
-
-  // Admin management (superAdmin only)
-  ADMIN_MANAGE = 'admin.manage',
-  ROLE_MANAGE = 'role.manage',
-
-  // Exports
-  EXPORT_REQUEST = 'export.request',
-}
-
-export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
-  superAdmin: Object.values(AdminPermission),  // all
-  ops: [/* most operational permissions */],
-  finance: [/* PAYMENT_*, PAYOUT_*, REFUND, ASTROLOGER_RECHARGE, EXPORT_REQUEST */],
-  support: [/* CUSTOMER_VIEW, CONSULTATION_VIEW, SUPPORT_*, FEEDBACK_VIEW */],
-  content: [/* HOROSCOPE_*, ARTICLE_*, BANNER_*, PUSH_CAMPAIGN_*, PUJA_MANAGE */],
-  analyst: [/* all *_VIEW + EXPORT_REQUEST */],
-};
-```
+The `AdminPermission` enum (in `packages/sharedConstants/adminPermissions.ts`) defines 34 fine-grained permissions across: dashboard, astrologer management, customer management, consultation access, finance/payouts, content (horoscope/article/banner/push), puja, AstroMall, support tickets, settings, observability (log/audit/error view + resolve), admin management, and export. The `ROLE_PERMISSIONS` map assigns the appropriate permissions to each role. `superAdmin` gets all; other roles get relevant subsets.
 
 Build:
 - `requireRole(...roles)` and `requirePermission(...perms)` Fastify preHandlers
@@ -114,108 +32,37 @@ Build:
 
 ### A1.2 Generic list/filter/search/pagination
 
-Build a reusable utility:
-
-```typescript
-// apps/backend/src/admin/shared/listQuery.ts
-export interface ListQueryInput {
-  page?: number;            // default 1
-  limit?: number;           // default 20, max 100
-  sort?: string;            // '-createdAt' | 'name' | etc.
-  search?: string;          // free text, applied per-resource
-  filters?: Record<string, unknown>;  // resource-specific
-  cursor?: string;          // alternative to page for high-volume
-}
-
-export interface ListQueryResult<T> {
-  items: T[];
-  page: number;
-  limit: number;
-  total: number;
-  totalPages: number;
-  nextCursor?: string;
-}
-```
-
-Every admin list endpoint uses this contract. Standardized OpenAPI schema.
+Build a reusable `ListQueryInput` type (in `apps/backend/src/admin/shared/listQuery.ts`) with fields: `page` (default 1), `limit` (default 20, max 100), `sort` (e.g. `-createdAt`), `search` (free text), `filters` (resource-specific key-value map), and `cursor` (alternative to page for high-volume). The corresponding `ListQueryResult<T>` type returns: `items`, `page`, `limit`, `total`, `totalPages`, and optional `nextCursor`. Every admin list endpoint uses this contract with a standardized OpenAPI schema.
 
 ### A1.3 Export system (mandatory for every list)
 
-Exports are **always async**, never blocking the request:
+Exports are **always async**, never blocking the request. The `exportJobs` table tracks: `id`, `requestedBy` (admin id), `resource` (customers/astrologers/consultations etc.), `format` (csv/xlsx), `filters` (jsonb), `status` (queued/processing/completed/failed/expired), `totalRows`, `fileUrl` (S3 pre-signed URL when complete), `fileSizeBytes`, `errorMessage`, `expiresAt` (7 days after completion), and timestamps.
 
-```sql
-create table "exportJobs" (
-  "id"            uuid primary key default gen_random_uuid(),
-  "requestedBy"   uuid not null references "admins"("id"),
-  "resource"      text not null,        -- 'customers' | 'astrologers' | 'consultations' | ...
-  "format"        text not null,        -- 'csv' | 'xlsx'
-  "filters"       jsonb,
-  "status"        text not null,        -- queued | processing | completed | failed | expired
-  "totalRows"     int,
-  "fileUrl"       text,                 -- S3 pre-signed URL when complete
-  "fileSizeBytes" bigint,
-  "errorMessage"  text,
-  "expiresAt"     timestamptz,          -- 7 days after completion
-  "createdAt"     timestamptz not null default now(),
-  "completedAt"   timestamptz
-);
 ```
-
-- Endpoint: `POST /v1/admin/{resource}/export { format, filters }` → returns `{ exportJobId }`
-- Endpoint: `GET /v1/admin/exports/:id` → status + download URL when ready
-- Endpoint: `GET /v1/admin/exports?status=...` → list of admin's recent exports
+- Endpoint: POST /v1/admin/{resource}/export { format, filters } → returns { exportJobId }
+- Endpoint: GET /v1/admin/exports/:id → status + download URL when ready
+- Endpoint: GET /v1/admin/exports?status=... → list of admin's recent exports
 - BullMQ worker `exportWorker` streams rows from DB → CSV/XLSX → S3 (pre-signed download URL)
 - Notification emailed to admin when ready
-- Audit: `export.requested`, `export.completed`, `export.downloaded`
+- Audit: export.requested, export.completed, export.downloaded
+```
 
 Build the export framework once; every list endpoint just declares its export shape.
 
 ### A1.4 Bulk operations framework
 
-Many admin actions are batch (block 100 customers, approve 50 payouts). Build:
-
-```typescript
-// apps/backend/src/admin/shared/bulkOperation.ts
-async function executeBulk<T, R>(
-  items: T[],
-  operation: (item: T, ctx: AdminContext) => Promise<R>,
-  options: { concurrency: number; auditAction: string }
-): Promise<{ succeeded: R[]; failed: Array<{ item: T; error: string }> }>
-```
-
-Bulk endpoints follow naming: `POST /v1/admin/customers/bulk-block`, etc. Each writes an audit row per item, plus a summary `bulkOperation.executed` row.
+Many admin actions are batch (block 100 customers, approve 50 payouts). Build an `executeBulk` utility (in `apps/backend/src/admin/shared/bulkOperation.ts`) that accepts: a list of items, an operation function, concurrency limit, and audit action name. It returns `{ succeeded, failed }` where `failed` items include the error message. Bulk endpoints follow naming: `POST /v1/admin/customers/bulk-block`, etc. Each writes an audit row per item, plus a summary `bulkOperation.executed` row.
 
 ### A1.5 Cron job framework
 
-Many features need scheduled tasks. Build a thin wrapper over BullMQ repeatable jobs:
-
-```typescript
-// apps/backend/src/jobs/scheduler.ts
-export function registerCron(name: string, cronExpr: string, handler: () => Promise<void>): void
-```
+Many features need scheduled tasks. Build a thin `registerCron(name, cronExpr, handler)` wrapper over BullMQ repeatable jobs (in `apps/backend/src/jobs/scheduler.ts`).
 
 All crons:
 - Inherit a synthetic `traceId` per run
 - Auto-report errors via `errorReporter`
 - Log start/end with duration
-- Track in `cronRuns` table (status, startedAt, finishedAt, error)
+- Track in `cronRuns` table: `jobName`, `status` (running/succeeded/failed), `startedAt`, `finishedAt`, `durationMs`, `errorMessage`, `metadata`, `traceId`, `createdAt`
 - Visible in admin panel under Settings → Scheduled jobs (with manual "run now" button)
-
-```sql
-create table "cronRuns" (
-  "id"          uuid primary key default gen_random_uuid(),
-  "jobName"     text not null,
-  "status"      text not null,        -- running | succeeded | failed
-  "startedAt"   timestamptz not null,
-  "finishedAt"  timestamptz,
-  "durationMs"  int,
-  "errorMessage" text,
-  "metadata"    jsonb,
-  "traceId"     text,
-  "createdAt"   timestamptz not null default now()
-);
-create index "idx_cronRuns_jobName_startedAt" on "cronRuns" ("jobName", "startedAt" desc);
-```
 
 **Stop here.** Show me RBAC working, an export of customers running end-to-end, and a sample cron job firing.
 
@@ -231,19 +78,7 @@ Two layers:
 - **Hot metrics** (computed on-read, cached 60s in Redis) — current online astrologers, active consultations now, today's revenue
 - **Aggregated metrics** (precomputed by cron, stored in `metricSnapshots` table) — daily/weekly/monthly trends
 
-```sql
-create table "metricSnapshots" (
-  "id"            uuid primary key default gen_random_uuid(),
-  "metricKey"     text not null,        -- 'dau' | 'consultations.completed' | 'revenue.gross' | ...
-  "granularity"   text not null,        -- 'hour' | 'day' | 'week' | 'month'
-  "bucketStartAt" timestamptz not null,
-  "value"         numeric(20,4) not null,
-  "dimensions"    jsonb,                -- { astrologerId, category, providerKey, ... }
-  "computedAt"    timestamptz not null default now(),
-  unique ("metricKey", "granularity", "bucketStartAt", "dimensions")
-);
-create index "idx_metricSnapshots_metric_granularity_bucket" on "metricSnapshots" ("metricKey", "granularity", "bucketStartAt" desc);
-```
+The `metricSnapshots` table stores: `metricKey` (e.g. dau/consultations.completed/revenue.gross), `granularity` (hour/day/week/month), `bucketStartAt`, `value` (numeric), `dimensions` (jsonb for slicing by astrologerId/category/providerKey), and `computedAt`. Unique on (metricKey, granularity, bucketStartAt, dimensions).
 
 Cron: `metricsAggregator` runs hourly, computes:
 - DAU / WAU / MAU (customer + astrologer)
@@ -344,13 +179,11 @@ POST /v1/admin/astrologers
 PATCH /v1/admin/astrologers/:id
        → edit profile fields
 
-POST /v1/admin/astrologers/:id/kyc/approve
-       { reason? }
-       → marks isVerified=true, fires welcome notification
-
-POST /v1/admin/astrologers/:id/kyc/reject
-       { reason }
-       → marks kycStatus='rejected', notifies astrologer with reason
+POST /v1/admin/astrologers/:id/kyc/decide
+       { decision: 'approved' | 'rejected', note?: string }
+       → approved: marks isVerified=true, fires welcome notification
+       → rejected: marks kycStatus='rejected', notifies astrologer with note as reason
+       NOTE: there is ONE endpoint for both approve and reject — not two separate routes
 
 POST /v1/admin/astrologers/:id/block
        { reason }
@@ -363,7 +196,7 @@ POST /v1/admin/astrologers/:id/commission
        → override default commission
 
 POST /v1/admin/astrologers/:id/recharge
-       { amountPaise, reason, providerRef? }
+       { amount, reason, providerRef? }
        → admin manually credits astrologer's earnings (e.g., bonus, dispute resolution)
        → creates astrologerEarnings row with type='ADMIN_CREDIT'
        → audited heavily; superAdmin/finance only
@@ -380,25 +213,9 @@ POST /v1/admin/astrologers/export
 
 ### A3.3 Astrologer categories (taxonomy)
 
-```sql
-create table "astrologerCategories" (
-  "id"          uuid primary key default gen_random_uuid(),
-  "slug"        text unique not null,    -- 'love-marriage' | 'career' | 'tarot' | ...
-  "title"       text not null,
-  "description" text,
-  "iconUrl"     text,
-  "sortOrder"   int not null default 0,
-  "isActive"    boolean not null default true,
-  "createdAt"   timestamptz not null default now(),
-  "updatedAt"   timestamptz not null default now()
-);
+The `astrologerCategories` table stores: `slug` (unique, e.g. love-marriage/career/tarot), `title`, `description`, `iconUrl`, `sortOrder`, `isActive`, timestamps.
 
-create table "astrologerCategoryAssignments" (
-  "astrologerId" uuid not null references "astrologers"("id") on delete cascade,
-  "categoryId"   uuid not null references "astrologerCategories"("id") on delete cascade,
-  primary key ("astrologerId", "categoryId")
-);
-```
+The `astrologerCategoryAssignments` join table links astrologers to categories via (astrologerId, categoryId) composite primary key.
 
 CRUD endpoints under `/v1/admin/astrologer-categories/*`. Full audit. Reorderable via `PATCH /reorder { ids: [] }`.
 
@@ -443,16 +260,16 @@ DELETE /v1/admin/customers/:id      // GDPR/DPDP delete; anonymizes per CLAUDE.m
 
 ```
 POST /v1/admin/customers/:id/wallet/credit
-     { amountPaise, reason, type }
+     { amount, reason, type }
      // type: 'GOODWILL' | 'COMPENSATION' | 'BONUS'
      // creates walletTransactions row, audited
 
 POST /v1/admin/customers/:id/wallet/debit
-     { amountPaise, reason }
+     { amount, reason }
      // rare; for fraud reversal
 
 POST /v1/admin/customers/:id/refund
-     { paymentOrderId, amountPaise, reason }
+     { paymentOrderId, amount, reason }
      // initiates refund via the original provider
      // creates walletTransactions REFUND row
      // audited heavily
@@ -506,7 +323,7 @@ POST /v1/admin/consultations/:id/end
      → admin force-ends a stuck consultation, finalizes billing
 
 POST /v1/admin/consultations/:id/refund
-     { amountPaise, reason }
+     { amount, reason }
      // refunds customer for a complaint
      // optionally claws back from astrologer earnings
      // audited
@@ -608,26 +425,11 @@ All reports exportable.
 
 ### A6.4 Refund inbox
 
-```sql
-create table "refundRequests" (
-  "id"             uuid primary key default gen_random_uuid(),
-  "customerId"     uuid not null references "customers"("id"),
-  "consultationId" uuid references "consultations"("id"),
-  "orderId"        uuid references "orders"("id"),
-  "pujaBookingId"  uuid references "pujaBookings"("id"),
-  "amountPaise"    bigint not null,
-  "reason"         text not null,        -- customer's reason
-  "status"         text not null,        -- pending | approved | rejected
-  "adminNote"      text,
-  "decidedBy"      uuid references "admins"("id"),
-  "decidedAt"      timestamptz,
-  "createdAt"      timestamptz not null default now()
-);
-```
+The `refundRequests` table stores: `id`, `customerId`, `consultationId` (optional), `orderId` (optional), `pujaBookingId` (optional), `amount` (bigint, 1/100 of ₹1), `reason` (customer's reason), `status` (pending/approved/rejected), `adminNote`, `decidedBy` (admin id), `decidedAt`, `createdAt`.
 
 ```
 GET  /v1/admin/refund-requests ?status=&from=
-POST /v1/admin/refund-requests/:id/approve { amountPaise?, adminNote }
+POST /v1/admin/refund-requests/:id/approve { amount?, adminNote }
 POST /v1/admin/refund-requests/:id/reject { adminNote }
 ```
 
@@ -641,110 +443,18 @@ This is a substantial subsystem. Customers book religious services (pujas) for s
 
 ### A7.1 Data model
 
-```sql
-create table "pujaTemplates" (
-  "id"              uuid primary key default gen_random_uuid(),
-  "slug"            text unique not null,        -- 'satyanarayan-katha' | 'navagraha-shanti' | ...
-  "title"           text not null,
-  "subtitle"        text,
-  "description"     text,
-  "category"        text,                        -- 'shanti' | 'graha' | 'special-occasion'
-  "deity"           text,
-  "occasion"        text[] not null default '{}',  -- 'griha-pravesh', 'birthday', ...
-  "durationMinutes" int not null,
-  "basePricePaise"  bigint not null,             -- includes a default package; tiers define more
-  "imageUrl"        text,
-  "galleryUrls"     text[] not null default '{}',
-  "videoUrl"        text,
-  "benefits"        text[] not null default '{}',
-  "rituals"         jsonb,                       -- structured list of rituals included
-  "samagriIncluded" jsonb,                       -- materials provided
-  "samagriRequired" jsonb,                       -- what customer needs to provide
-  "isActive"        boolean not null default true,
-  "sortOrder"       int not null default 0,
-  "createdAt"       timestamptz not null default now(),
-  "updatedAt"       timestamptz not null default now()
-);
+All puja tables are described in root `CLAUDE.md §12.15`. Key fields not listed there:
+- `pujaTemplates` also has: `subtitle`, `deity`, `occasion` (array), `galleryUrls` (array), `videoUrl`, `samagriIncluded` (jsonb), `samagriRequired` (jsonb)
+- `pujaSlots` also has: `timezone` (default Asia/Kolkata), `agoraChannelName`
+- `pujaBookings` also has: `paymentMethod` (wallet/provider), `walletTransactionId`, `liveStreamLink`, `recordingUrl`, `completedAt`, `cancelledAt`, `cancelReason`
 
-create table "pujaPackageTiers" (
-  "id"             uuid primary key default gen_random_uuid(),
-  "pujaTemplateId" uuid not null references "pujaTemplates"("id") on delete cascade,
-  "name"           text not null,             -- 'Basic' | 'Standard' | 'Premium'
-  "pricePaise"     bigint not null,
-  "inclusions"     text[] not null default '{}',
-  "maxParticipants" int,
-  "sortOrder"      int not null default 0
-);
-
-create table "pujaPanditAssignments" (
-  "id"             uuid primary key default gen_random_uuid(),
-  "pujaTemplateId" uuid not null references "pujaTemplates"("id") on delete cascade,
-  "astrologerId"   uuid not null references "astrologers"("id"),  -- pandits live in astrologers table with a specialty
-  "isPrimary"      boolean not null default false,
-  "createdAt"      timestamptz not null default now(),
-  unique ("pujaTemplateId", "astrologerId")
-);
-
-create table "pujaSlots" (
-  "id"             uuid primary key default gen_random_uuid(),
-  "pujaTemplateId" uuid not null references "pujaTemplates"("id"),
-  "astrologerId"   uuid references "astrologers"("id"),  -- pandit
-  "scheduledAt"    timestamptz not null,
-  "timezone"       text not null default 'Asia/Kolkata',
-  "capacity"       int not null default 1,
-  "bookedCount"    int not null default 0,
-  "status"         text not null,             -- open | full | cancelled | completed
-  "isLiveStreamed" boolean not null default false,
-  "agoraChannelName" text,
-  "createdAt"      timestamptz not null default now(),
-  "updatedAt"      timestamptz not null default now()
-);
-create index "idx_pujaSlots_scheduled" on "pujaSlots" ("scheduledAt");
-
-create table "pujaBookings" (
-  "id"               uuid primary key default gen_random_uuid(),
-  "bookingNumber"    text unique not null,    -- human-readable: PUJA-2026-04-00123
-  "customerId"       uuid not null references "customers"("id"),
-  "pujaTemplateId"   uuid not null references "pujaTemplates"("id"),
-  "pujaPackageTierId" uuid references "pujaPackageTiers"("id"),
-  "pujaSlotId"       uuid references "pujaSlots"("id"),  -- null if scheduled-on-demand
-  "scheduledAt"      timestamptz not null,
-  "amountPaise"      bigint not null,
-  "paymentMethod"    text not null,           -- 'wallet' | 'provider'
-  "paymentOrderId"   uuid references "paymentOrders"("id"),  -- if provider
-  "walletTransactionId" uuid references "walletTransactions"("id"),  -- if wallet
-  "status"           text not null,           -- pending | confirmed | inProgress | completed | cancelled | refunded
-  "devoteeName"      text not null,           -- on-behalf-of name (could differ from customer name)
-  "gotra"            text,
-  "specialRequests"  text,
-  "deliveryAddress"  jsonb,                   -- if prasad delivery
-  "liveStreamLink"   text,
-  "recordingUrl"     text,                    -- post-puja recording
-  "completedAt"      timestamptz,
-  "cancelledAt"      timestamptz,
-  "cancelReason"     text,
-  "createdAt"        timestamptz not null default now(),
-  "updatedAt"        timestamptz not null default now()
-);
-create index "idx_pujaBookings_customerId" on "pujaBookings" ("customerId");
-create index "idx_pujaBookings_status" on "pujaBookings" ("status");
-create index "idx_pujaBookings_scheduledAt" on "pujaBookings" ("scheduledAt");
-
-create table "pujaBookingTimeline" (
-  "id"          uuid primary key default gen_random_uuid(),
-  "bookingId"   uuid not null references "pujaBookings"("id") on delete cascade,
-  "event"       text not null,                -- 'created' | 'paid' | 'panditAssigned' | 'started' | 'completed' | ...
-  "actorType"   text,
-  "actorId"     uuid,
-  "note"        text,
-  "metadata"    jsonb,
-  "createdAt"   timestamptz not null default now()
-);
-```
+Additional tables:
+- **`pujaPanditAssignments`** — links pandits (astrologers with appropriate specialty) to templates: (pujaTemplateId, astrologerId) composite key, `isPrimary` flag.
+- **`pujaBookingTimeline`** — event log per booking: `bookingId`, `event` (created/paid/panditAssigned/started/completed etc.), `actorType`, `actorId`, `note`, `metadata`, `createdAt`.
 
 ### A7.2 Customer flow (booking)
 
-The puja booking flow lives under `/v1/customer/puja/*` (it's a customer-facing feature; admin manages it). Build the customer endpoints first since admin endpoints depend on them.
+The puja booking flow lives under `/v1/customer/puja/*`. Build the customer endpoints first since admin endpoints depend on them.
 
 ```
 GET  /v1/customer/puja/templates
@@ -813,7 +523,7 @@ GET    /v1/admin/puja/bookings
 GET    /v1/admin/puja/bookings/:id
 PATCH  /v1/admin/puja/bookings/:id
        → assign/change pandit, update status, attach recording, etc.
-POST   /v1/admin/puja/bookings/:id/refund { amountPaise, reason }
+POST   /v1/admin/puja/bookings/:id/refund { amount, reason }
 POST   /v1/admin/puja/bookings/:id/timeline { event, note }
        → admin adds manual timeline note
 
@@ -844,30 +554,7 @@ If `pujaSlots.isLiveStreamed=true`, integrate Agora Live (separate from per-minu
 
 ### A8.1 Horoscopes
 
-```sql
-create table "horoscopes" (
-  "id"           uuid primary key default gen_random_uuid(),
-  "zodiacSign"   text not null,        -- aries | taurus | ... | pisces
-  "period"       text not null,        -- daily | weekly | monthly | yearly
-  "periodStart"  date not null,
-  "periodEnd"    date not null,
-  "language"     text not null default 'en',
-  "summary"      text not null,
-  "love"         text,
-  "career"       text,
-  "health"       text,
-  "wealth"       text,
-  "luckyColor"   text,
-  "luckyNumber"  text,
-  "rating"       int,                  -- 1-5
-  "publishedAt"  timestamptz,
-  "isPublished"  boolean not null default false,
-  "createdBy"    uuid references "admins"("id"),
-  "createdAt"    timestamptz not null default now(),
-  "updatedAt"    timestamptz not null default now(),
-  unique ("zodiacSign", "period", "periodStart", "language")
-);
-```
+The `horoscopes` table stores: `zodiacSign`, `period` (daily/weekly/monthly/yearly), `periodStart`, `periodEnd`, `language` (default en), `summary`, separate text fields for love/career/health/wealth, `luckyColor`, `luckyNumber`, `rating` (1–5), `publishedAt`, `isPublished`, `createdBy` (admin id), timestamps. Unique on (zodiacSign, period, periodStart, language).
 
 ```
 // Admin
@@ -898,51 +585,13 @@ GET    /v1/public/horoscopes/yearly/:zodiacSign?language=
 
 ### A8.2 Articles / blog
 
-```sql
-create table "articles" (
-  "id"             uuid primary key default gen_random_uuid(),
-  "slug"           text unique not null,
-  "title"          text not null,
-  "subtitle"       text,
-  "coverImageUrl"  text,
-  "body"           text not null,        -- markdown
-  "category"       text,
-  "tags"           text[] not null default '{}',
-  "language"       text not null default 'en',
-  "authorName"     text,
-  "isPublished"    boolean not null default false,
-  "publishedAt"    timestamptz,
-  "viewCount"      bigint not null default 0,
-  "createdBy"      uuid references "admins"("id"),
-  "createdAt"      timestamptz not null default now(),
-  "updatedAt"      timestamptz not null default now()
-);
-```
+The `articles` table stores: `slug` (unique), `title`, `subtitle`, `coverImageUrl`, `body` (markdown), `category`, `tags` (array), `language` (default en), `authorName`, `isPublished`, `publishedAt`, `viewCount`, `createdBy`, timestamps.
 
 CRUD under `/v1/admin/articles/*` and public read at `/v1/public/articles/*`. Search via Meilisearch.
 
 ### A8.3 Promotional banners
 
-```sql
-create table "banners" (
-  "id"            uuid primary key default gen_random_uuid(),
-  "title"         text not null,
-  "imageUrl"      text not null,
-  "ctaType"       text not null,        -- 'astrologerProfile' | 'pujaTemplate' | 'product' | 'externalUrl' | 'category' | 'horoscope'
-  "ctaTarget"     text not null,        -- id, slug, or url depending on type
-  "placement"     text not null,        -- 'home' | 'astrologerListTop' | 'walletScreen' | ...
-  "audience"      jsonb,                -- { genders: [], minAge, maxAge, languages: [], cities: [], excludeCustomerIds: [] }
-  "priority"      int not null default 0,  -- higher = shown first
-  "startAt"       timestamptz not null,
-  "endAt"         timestamptz not null,
-  "isActive"      boolean not null default true,
-  "viewCount"     bigint not null default 0,
-  "tapCount"      bigint not null default 0,
-  "createdBy"     uuid references "admins"("id"),
-  "createdAt"     timestamptz not null default now(),
-  "updatedAt"     timestamptz not null default now()
-);
-```
+The `banners` table stores (beyond root CLAUDE.md §12.13): `subtitle`, `audience` (jsonb with genders/minAge/maxAge/languages/cities/excludeCustomerIds for targeting).
 
 ```
 // Admin CRUD
@@ -963,29 +612,7 @@ Cron `bannerExpiry` deactivates expired banners hourly.
 
 ### A8.4 Push notification campaigns
 
-```sql
-create table "pushCampaigns" (
-  "id"             uuid primary key default gen_random_uuid(),
-  "name"           text not null,
-  "title"          text not null,
-  "body"           text not null,
-  "imageUrl"       text,
-  "deeplink"       text,
-  "targetType"     text not null,        -- 'allCustomers' | 'allAstrologers' | 'segment' | 'individual'
-  "segment"        jsonb,                -- filter criteria when targetType='segment'
-  "recipientIds"   uuid[],               -- when targetType='individual'
-  "scheduledAt"    timestamptz,          -- null = send immediately
-  "status"         text not null,        -- draft | scheduled | sending | sent | failed | cancelled
-  "totalRecipients" int,
-  "sentCount"      int not null default 0,
-  "deliveredCount" int not null default 0,
-  "failedCount"    int not null default 0,
-  "openedCount"    int not null default 0,
-  "createdBy"      uuid references "admins"("id"),
-  "sentAt"         timestamptz,
-  "createdAt"      timestamptz not null default now()
-);
-```
+The `pushCampaigns` table stores: `name`, `title`, `body`, `imageUrl`, `deeplink`, `targetType` (allCustomers/allAstrologers/segment/individual), `segment` (jsonb filter criteria), `recipientIds` (uuid array for individual targeting), `scheduledAt`, `status` (draft/scheduled/sending/sent/failed/cancelled), delivery counts (total/sent/delivered/failed/opened), `createdBy`, `sentAt`, timestamps.
 
 ```
 // Admin
@@ -1028,7 +655,7 @@ GET    /v1/admin/orders ?status=&from=&to=&customerId=&search=
 GET    /v1/admin/orders/:id
 PATCH  /v1/admin/orders/:id/status { status, note, trackingNumber? }
        → 'paid' → 'packed' → 'shipped' → 'delivered'; or 'cancelled'
-POST   /v1/admin/orders/:id/refund { amountPaise, reason }
+POST   /v1/admin/orders/:id/refund { amount, reason }
 POST   /v1/admin/orders/export
 ```
 
@@ -1040,39 +667,9 @@ POST   /v1/admin/orders/export
 
 ### A10.1 Support tickets
 
-```sql
-create table "supportTickets" (
-  "id"             uuid primary key default gen_random_uuid(),
-  "ticketNumber"   text unique not null,    -- T-2026-04-00123
-  "submitterType"  text not null,           -- 'customer' | 'astrologer'
-  "submitterId"   uuid not null,
-  "category"       text not null,           -- 'payment' | 'consultation' | 'kyc' | 'puja' | 'order' | 'general'
-  "priority"       text not null default 'normal',  -- low | normal | high | urgent
-  "subject"        text not null,
-  "description"    text not null,
-  "attachmentUrls" text[] not null default '{}',
-  "linkedConsultationId" uuid,
-  "linkedOrderId"        uuid,
-  "linkedPaymentOrderId" uuid,
-  "status"         text not null,           -- open | inProgress | waitingOnUser | resolved | closed
-  "assignedTo"     uuid references "admins"("id"),
-  "resolvedAt"     timestamptz,
-  "resolvedBy"     uuid references "admins"("id"),
-  "createdAt"      timestamptz not null default now(),
-  "updatedAt"      timestamptz not null default now()
-);
+The `supportTickets` table (beyond root CLAUDE.md §12.12) also stores: `linkedConsultationId`, `linkedOrderId`, `linkedPaymentOrderId` for context linking.
 
-create table "supportMessages" (
-  "id"          uuid primary key default gen_random_uuid(),
-  "ticketId"    uuid not null references "supportTickets"("id") on delete cascade,
-  "authorType"  text not null,              -- 'customer' | 'astrologer' | 'admin' | 'system'
-  "authorId"    uuid,
-  "body"        text not null,
-  "attachmentUrls" text[] not null default '{}',
-  "isInternalNote" boolean not null default false,  -- admin-only note
-  "createdAt"   timestamptz not null default now()
-);
-```
+The `supportMessages` table has: `ticketId`, `authorType`, `authorId`, `body`, `attachmentUrls`, `isInternalNote` (admin-only note flag), `createdAt`.
 
 ```
 // User-facing (customer/astrologer creates tickets)
@@ -1097,20 +694,7 @@ GET    /v1/admin/support/stats           // open by priority, SLA breaches, agen
 
 Lightweight: in-app feedback form, app store reviews, NPS surveys.
 
-```sql
-create table "feedback" (
-  "id"            uuid primary key default gen_random_uuid(),
-  "submitterType" text not null,
-  "submitterId"   uuid,
-  "type"          text not null,         -- 'general' | 'bug' | 'feature' | 'nps'
-  "rating"        int,                   -- 1-10 for NPS, 1-5 for general
-  "comment"       text,
-  "appVersion"    text,
-  "platform"      text,
-  "metadata"      jsonb,
-  "createdAt"     timestamptz not null default now()
-);
-```
+The `feedback` table stores: `submitterType`, `submitterId`, `type` (general/bug/feature/nps), `rating` (1–10 for NPS, 1–5 for general), `comment`, `appVersion`, `platform`, `metadata` (jsonb), `createdAt`.
 
 ```
 POST   /v1/customer/feedback           // user submits
@@ -1127,27 +711,17 @@ GET    /v1/admin/feedback/stats        // NPS over time, sentiment trends
 
 ### A11.1 App settings (key-value)
 
-```sql
-create table "appSettings" (
-  "key"        text primary key,
-  "value"      jsonb not null,
-  "description" text,
-  "category"   text,
-  "isSensitive" boolean not null default false,    -- if true, masked in UI by default
-  "updatedBy"  uuid references "admins"("id"),
-  "updatedAt"  timestamptz not null default now()
-);
-```
+The `appSettings` table stores: `key` (primary), `value` (jsonb), `description`, `category`, `isSensitive` (masked in UI by default), `updatedBy`, `updatedAt`.
 
 Examples:
 - `commission.defaultPct` = `30`
-- `wallet.minBalanceFiveMinPaise` = `5000`
+- `wallet.minBalanceFiveMin` = `5000` (stored as integer, 1/100 of ₹1)
 - `consultation.acceptTimeoutSeconds` = `30`
 - `consultation.lowBalanceWarningSeconds` = `60`
 - `puja.cancellationPolicy` = `{ "before24h": 100, "before12h": 50, "before6h": 25, "after": 0 }`
-- `referral.signupBonusPaise` = `5000`
+- `referral.signupBonus` = `5000` (stored as integer, 1/100 of ₹1)
 - `aiChat.enabled` = `true`
-- `aiChat.pricePerMessagePaise` = `200`
+- `aiChat.pricePerMessage` = `200` (stored as integer, 1/100 of ₹1)
 - `featureFlags.videoCallsEnabled` = `false`
 
 ```
@@ -1188,8 +762,6 @@ PATCH  /v1/admin/feature-flags/:flag { enabled, audience? }
 GET    /v1/admin/admins ?role=&isActive=
 POST   /v1/admin/admins                       // superAdmin only; sends invite email
 PATCH  /v1/admin/admins/:id                   // role, customPermissions, isActive
-POST   /v1/admin/admins/:id/reset-password    // sends reset link
-POST   /v1/admin/admins/:id/disable-totp      // emergency reset
 DELETE /v1/admin/admins/:id                   // soft delete
 
 GET    /v1/admin/admins/:id/sessions          // active sessions
@@ -1198,9 +770,6 @@ POST   /v1/admin/admins/:id/force-logout
 GET    /v1/admin/admins/:id/audit-trail       // their actions
 GET    /v1/admin/me                           // current admin profile
 PATCH  /v1/admin/me                           // edit own profile
-POST   /v1/admin/me/change-password
-POST   /v1/admin/me/setup-totp                // QR + verify
-POST   /v1/admin/me/disable-totp              // requires current TOTP
 ```
 
 Roles & custom permissions managed:
@@ -1263,29 +832,9 @@ All viewer access is itself audited (`audit.logView`, `audit.errorView`).
 
 A unified inbox of generated reports (separate from exports — exports are user-triggered, reports are scheduled).
 
-```sql
-create table "scheduledReports" (
-  "id"            uuid primary key default gen_random_uuid(),
-  "name"          text not null,
-  "reportType"    text not null,           -- 'dailyFinancial' | 'weeklyOps' | 'monthlyEarnings' | ...
-  "schedule"      text not null,           -- cron expression
-  "recipients"    text[] not null,         -- admin emails
-  "format"        text not null default 'pdf',
-  "filters"       jsonb,
-  "isActive"      boolean not null default true,
-  "lastRunAt"     timestamptz,
-  "createdBy"     uuid references "admins"("id"),
-  "createdAt"     timestamptz not null default now()
-);
+The `scheduledReports` table stores: `name`, `reportType` (dailyFinancial/weeklyOps/monthlyEarnings etc.), `schedule` (cron expression), `recipients` (admin emails array), `format` (default pdf), `filters` (jsonb), `isActive`, `lastRunAt`, `createdBy`, timestamps.
 
-create table "reportRuns" (
-  "id"                uuid primary key default gen_random_uuid(),
-  "scheduledReportId" uuid references "scheduledReports"("id"),
-  "fileUrl"           text,
-  "status"            text not null,
-  "generatedAt"       timestamptz not null default now()
-);
-```
+The `reportRuns` table stores: `scheduledReportId`, `fileUrl`, `status`, `generatedAt`.
 
 ```
 GET    /v1/admin/scheduled-reports
@@ -1330,24 +879,9 @@ GET    /v1/admin/reports/inbox          // all delivered reports for current adm
 
 All OTP delivery (phone SMS + email OTP) uses **MSG91** — not AWS SES, not Twilio.
 
-**SMS OTP:**
-```
-POST https://control.msg91.com/api/v5/otp
-Headers: authkey: MSG91_AUTH_KEY
-Body: { template_id, mobile, otp, otp_expiry: 5 }
-```
-- `template_id` = `MSG91_OTP_TEMPLATE_ID` (must be DLT-approved)
-- `otp_expiry` = 5 (minutes)
-- Mobile format: `91XXXXXXXXXX` (country code + 10 digits, no `+`)
+**SMS OTP:** POST to `https://control.msg91.com/api/v5/otp` with `authkey: MSG91_AUTH_KEY` header. Body: `{ template_id, mobile, otp, otp_expiry: 5 }`. Mobile format: `91XXXXXXXXXX` (no `+`). OTP TTL: 5 minutes.
 
-**Email OTP:**
-```
-POST https://api.msg91.com/api/v5/email/send
-Headers: authkey: MSG91_AUTH_KEY
-Body: { to: [{ email, name }], from: { email: MSG91_FROM_EMAIL, name: 'Astrobless' },
-        domain: MSG91_EMAIL_DOMAIN, template_id: MSG91_EMAIL_OTP_TEMPLATE_ID,
-        variables: { otp, name } }
-```
+**Email OTP:** POST to `https://api.msg91.com/api/v5/email/send` with same auth header. Body: `{ to, from: { email: MSG91_FROM_EMAIL, name: 'Astrobless' }, domain: MSG91_EMAIL_DOMAIN, template_id: MSG91_EMAIL_OTP_TEMPLATE_ID, variables: { otp, name } }`.
 
 **Test mode:** When `TEST_OTP=true` (local/dev only), the backend accepts OTP `123456` for any phone/email without calling MSG91. This must NEVER be enabled in staging or production.
 
@@ -1402,7 +936,7 @@ POST /v1/admin/kundli-requests/:id/refund     { reason }
 - `kundli:completed` — server → customer when report is submitted
 - `kundli:declined` — server → customer when astrologer declines
 
-**Billing:** Kundli reports are **fixed price** (not per-minute). The customer's wallet is debited at request creation, held in `lockedPaise` until the report is completed. On completion → release to platform + astrologer earning. On decline/expiry → full refund.
+**Billing:** Kundli reports are **fixed price** (not per-minute). The customer's wallet is debited at request creation, held in locked funds until the report is completed. On completion → release to platform + astrologer earning. On decline/expiry → full refund.
 
 **SLA enforcement:** BullMQ scheduled job checks every 30 minutes for requests past their `slaDueAt`. Overdue requests auto-escalate to admin and send a warning FCM to the astrologer.
 
@@ -1420,14 +954,20 @@ The astrologer persona follows the exact same auth patterns as documented in roo
 
 ---
 
-### Admin login — email+password removed (locked)
+### Admin login — email+password and TOTP removed (locked)
 
-The `POST /v1/admin/auth/login` (email+password) endpoint is **removed**. Admin auth is:
-1. Google OAuth (for Google Workspace accounts) — issues `{ tempToken }`
-2. Email OTP (for non-Google accounts) — issues `{ tempToken }`
-3. TOTP (mandatory second step for all admins) — issues full session
+The `POST /v1/admin/auth/login` (email+password) endpoint does **not exist**. TOTP has also been **completely removed**. Admin auth is now single-step:
 
-No admin has a `passwordHash`. The `passwordHash` column on `admins` table should not exist (or be nullable and ignored).
+1. Google OAuth (for Google Workspace accounts) — verify idToken → issue JWT directly
+2. Email OTP (for non-Google accounts) — verify OTP → issue JWT directly
+
+Both paths return `{ accessToken, refreshToken, admin: { id, email, name, role, customPermissions } }` immediately. There is no intermediate `tempToken`, no `/admin/auth/totp` endpoint, no `/admin/auth/totp/enroll` endpoint.
+
+No admin has a `passwordHash` or `totpSecret`. Those columns do not exist on the `admins` table.
+
+**What was removed from `adminAuth.service.ts`:** `adminVerifyTotp`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `skipTotp`, `setTempToken`, `getTempToken`, `deleteTempToken`, `adminTempTokenKey`.
+
+**Dependencies removed from `backend/package.json`:** `otplib`, `qrcode`, `@types/qrcode`.
 
 ---
 
@@ -1439,7 +979,41 @@ The admin panel login page has been redesigned with a split layout:
 - No Card wrapper — raw divs with `space-y-7`
 - The `(auth)/layout.tsx` renders the full split layout; auth pages render content directly
 
-All auth pages (signin, otp, totp) follow the same pattern: no `<Card>` wrapper, heading + subtext + form.
+All auth pages (signin, otp) follow the same pattern: no `<Card>` wrapper, heading + subtext + form.
+
+---
+
+### New schema models added (2026-04-21)
+
+The following 15 models were added to the Drizzle schema. Backend modules/endpoints should be built for each:
+
+**Social & engagement:**
+- `astrologerFollowers` — customer follows an astrologer; endpoints: `POST/DELETE /v1/customer/astrologers/:id/follow`, `GET /v1/customer/astrologers/following`
+- `astrologerBlocks` — customer blocks an astrologer (hides from browse); endpoints: `POST/DELETE /v1/customer/astrologers/:id/block`
+
+**Referrals & promotions:**
+- `referralRewards` — tracks referral conversions and rewards; auto-created by the referral service on `firstConsultation` event
+- `rechargePacks` — admin-managed wallet top-up packs shown in the top-up screen; endpoints: `GET /v1/public/recharge-packs`, `GET/POST/PATCH/DELETE /v1/admin/recharge-packs`
+- `coupons` + `couponRedemptions` — discount codes; endpoints: `POST /v1/customer/wallet/topup { couponCode? }`, `GET/POST/PATCH/DELETE /v1/admin/coupons`
+
+**Customer data:**
+- `customerAddresses` — saved delivery addresses; endpoints: `GET/POST/PATCH/DELETE /v1/customer/addresses`
+
+**Support:**
+- `supportTickets` + `supportMessages` — in-app support; endpoints: `POST/GET /v1/customer/support/tickets`, `POST/GET /v1/astrologer/support/tickets`, full admin CRUD under `/v1/admin/support/tickets`
+
+**Content:**
+- `banners` — promotional banners; endpoints: `GET /v1/public/banners?placement=`, admin CRUD under `/v1/admin/banners`
+
+**Kundli:**
+- `kundliMatches` — cached compatibility match results; endpoints: `POST /v1/customer/kundli/match { profileAId, profileBId }`, `GET /v1/customer/kundli/matches`
+
+**Puja system (4 models):** `pujaTemplates`, `pujaPackageTiers`, `pujaSlots`, `pujaBookings` — full endpoint spec in `backend/CLAUDE.md §Phase A7` above.
+
+**Consultation fields added:**
+- `recordingUrl` — Agora cloud recording URL (set post-call if opted in)
+- `recordingExpiresAt` — 90-day retention policy enforcement
+- `lastHeartbeatAt` — last billing tick timestamp for stuck-consultation detection
 
 ---
 
@@ -1447,51 +1021,14 @@ All auth pages (signin, otp, totp) follow the same pattern: no `<Card>` wrapper,
 
 **Problem:** Zod `.default()` on querystring fields generates invalid JSON Schema `required` array format, causing `FastifyError: Failed building the validation schema … data/required must be array` on startup.
 
-**Rule:** Admin route querystring schemas must use `.optional()` not `.default()` on all fields. Handle defaults in the service layer with `?? defaultValue`.
-
-```typescript
-// ✅ CORRECT — schema
-const HoroscopeListQuerySchema = z.object({
-  page:  z.coerce.number().int().min(1).optional(),   // NOT .default(1)
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-});
-
-// ✅ CORRECT — service
-limit: q.limit ?? 20,
-offset: ((q.page ?? 1) - 1) * (q.limit ?? 20),
-
-// ❌ WRONG
-page: z.coerce.number().int().min(1).default(1),     // causes AJV crash
-```
+**Rule:** Admin route querystring schemas must use `.optional()` not `.default()` on all fields. Handle defaults in the service layer with `?? defaultValue`. For example, `page: z.coerce.number().int().min(1).optional()` in the schema, then `q.page ?? 1` in the service.
 
 ### Fastify route plugin pattern (2026-04-21, locked)
 
-All admin routes use `FastifyPluginAsync` + `zodToJsonSchema()`, not `FastifyPluginAsyncZod` with direct Zod schema objects. This matches all working admin route modules (astrologers, customers, etc.).
+All admin routes use `FastifyPluginAsync` + `zodToJsonSchema()`, **not** `FastifyPluginAsyncZod` with direct Zod schema objects. This matches all working admin route modules (astrologers, customers, etc.).
 
-```typescript
-// ✅ CORRECT pattern
-import type { FastifyPluginAsync } from 'fastify';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+The correct pattern: import `FastifyPluginAsync` from `fastify` and `zodToJsonSchema` from `zod-to-json-schema`. Register routes with `schema: { querystring: zodToJsonSchema(XxxListQuerySchema), response: { 200: zodToJsonSchema(XxxResultSchema) } }`.
 
-export const adminXxxRoutes: FastifyPluginAsync = async (app) => {
-  app.get('/v1/admin/xxx', {
-    preHandler: [guard],
-    schema: {
-      querystring: zodToJsonSchema(XxxListQuerySchema),
-      response: { 200: zodToJsonSchema(XxxListResultSchema) },
-    },
-    handler: ctrl.listXxx,
-  });
-};
-
-// ❌ WRONG pattern (breaks on Fastify v4 + zod-fastify-type-provider)
-import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
-export const adminXxxRoutes: FastifyPluginAsyncZod = async (app) => {
-  app.get('/v1/admin/xxx', {
-    schema: { querystring: XxxListQuerySchema },  // direct Zod object — validation breaks
-    handler: ctrl.listXxx,
-  });
-};
-```
+The wrong pattern (`FastifyPluginAsyncZod` with a direct Zod object as the `querystring` schema) breaks on Fastify v4 + zod-fastify-type-provider.
 
 The canonical example of the correct pattern is `admin/content/adminHoroscopes.routes.ts`.

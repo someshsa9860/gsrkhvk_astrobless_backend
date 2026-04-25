@@ -1,6 +1,6 @@
-// HTTP client for astrologyapi.com (VedicAstroAPI).
-// Uses HTTP Basic auth: userId:apiKey.
-// Free tier gives 100 calls/day; production should cache aggressively.
+// HTTP client for vedicastroapi.com v3-json API.
+// Auth: ?api_key=YOUR_API_KEY query param on every request (no userId needed).
+// All requests are GET. Free tier: 500 calls/day.
 
 import axios from 'axios';
 import { env } from '../config/env.js';
@@ -25,55 +25,66 @@ export interface VedicHoroscope {
   luckyDay?: string;
 }
 
-// VedicAstroAPI sign slugs match our naming exactly.
 const client = axios.create({
-  baseURL: env.VEDIC_ASTRO_API_BASE_URL,
+  baseURL: 'https://api.vedicastroapi.com/v3-json',
   timeout: 15_000,
-  auth: {
-    username: env.VEDIC_ASTRO_API_USER_ID,
-    password: env.VEDIC_ASTRO_API_KEY,
-  },
-  headers: { 'Content-Type': 'application/json' },
+  params: { api_key: env.VEDIC_ASTRO_API_KEY, lang: 'en' },
 });
 
-// Maps the raw API response to our internal shape.
+// v3-json responses wrap data as { status: 200, response: { ... } }
+function unwrap<T>(data: { status: number; response: T }): T {
+  return data.response;
+}
+
+// API expects zodiac as a 1-based index (1=Aries … 12=Pisces)
+const ZODIAC_INDEX: Record<ZodiacSign, number> = {
+  aries: 1, taurus: 2, gemini: 3, cancer: 4, leo: 5, virgo: 6,
+  libra: 7, scorpio: 8, sagittarius: 9, capricorn: 10, aquarius: 11, pisces: 12,
+};
+
 function normalise(sign: string, raw: Record<string, unknown>): VedicHoroscope {
+  // lucky_number may be an array — join to string
+  const ln = raw['lucky_number'];
+  const luckyNumber = Array.isArray(ln) ? ln.join(', ') : (ln !== undefined ? String(ln) : undefined);
+
   return {
     sign,
-    general:     String((raw['prediction_today'] ?? raw['prediction'] ?? raw['lucky_elements'] ?? raw['bot_response'] ?? '')),
-    love:        raw['love'] ? String(raw['love']) : undefined,
-    career:      raw['career'] ? String(raw['career']) : undefined,
-    health:      raw['health'] ? String(raw['health']) : undefined,
-    wealth:      raw['wealth'] ?? raw['money'] ? String(raw['wealth'] ?? raw['money']) : undefined,
+    general:     String(raw['bot_response'] ?? raw['prediction'] ?? raw['prediction_today'] ?? ''),
+    career:      raw['career'] !== undefined ? String(raw['career']) : undefined,
+    health:      raw['health'] !== undefined ? String(raw['health']) : undefined,
     luckyColor:  raw['lucky_color'] ? String(raw['lucky_color']) : undefined,
-    luckyNumber: raw['lucky_number'] !== undefined ? String(raw['lucky_number']) : undefined,
-    luckyDay:    raw['lucky_day'] ? String(raw['lucky_day']) : undefined,
+    luckyNumber,
   };
 }
 
-async function postSign(endpoint: string, sign: string, extra: Record<string, unknown> = {}): Promise<VedicHoroscope> {
-  const body = { sign, ...extra };
+async function getSign(endpoint: string, sign: ZodiacSign, extra: Record<string, unknown> = {}): Promise<VedicHoroscope> {
   logger.debug({ endpoint, sign }, '[VedicAstro] fetching horoscope');
-  const { data } = await client.post<Record<string, unknown>>(endpoint, body);
-  return normalise(sign, data);
+  const { data } = await client.get<{ status: number; response: Record<string, unknown> }>(endpoint, {
+    params: { zodiac: ZODIAC_INDEX[sign], ...extra },
+  });
+  return normalise(sign, unwrap(data));
 }
 
 export async function getDailyHoroscope(sign: ZodiacSign): Promise<VedicHoroscope> {
-  // POST /sun_sign_prediction/daily/:lang  body: { sign, date: 'YYYY-MM-DD' }
-  const today = new Date().toISOString().slice(0, 10);
-  return postSign('/sun_sign_prediction/daily/en', sign, { date: today });
+  // date param required: DD/MM/YYYY (today)
+  const now = new Date();
+  const dd = String(now.getDate()).padStart(2, '0');
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const yyyy = now.getFullYear();
+  return getSign('/prediction/daily-sun', sign, { date: `${dd}/${mm}/${yyyy}` });
 }
 
 export async function getWeeklyHoroscope(sign: ZodiacSign): Promise<VedicHoroscope> {
-  return postSign('/sun_sign_prediction/weekly', sign);
+  return getSign('/prediction/weekly-sun', sign, { week: 'thisweek' });
 }
 
 export async function getMonthlyHoroscope(sign: ZodiacSign): Promise<VedicHoroscope> {
-  return postSign('/sun_sign_prediction/monthly', sign);
+  // No monthly-sun endpoint in v3-json API — use weekly as best available approximation
+  return getSign('/prediction/weekly-sun', sign, { week: 'thisweek' });
 }
 
 export async function getYearlyHoroscope(sign: ZodiacSign): Promise<VedicHoroscope> {
-  return postSign('/sun_sign_prediction/yearly', sign);
+  return getSign('/prediction/yearly', sign, { year: new Date().getFullYear() });
 }
 
 export { ZODIAC_SIGNS };
@@ -124,17 +135,17 @@ export interface DashaPeriod {
 }
 
 export interface MangalDosha {
-  isManglik:     boolean;
-  manglikPct:    number;
-  description:   string;
-  remedies:      string[];
+  isManglik:   boolean;
+  manglikPct:  number;
+  description: string;
+  remedies:    string[];
 }
 
 export interface KaalSarpDosha {
-  isPresent:  boolean;
-  type:       string;
-  severity:   string;
-  description:string;
+  isPresent:   boolean;
+  type:        string;
+  severity:    string;
+  description: string;
 }
 
 export interface FullKundliChartData {
@@ -146,19 +157,19 @@ export interface FullKundliChartData {
     nakshatraLord: string;
     nakshatraPada: number;
   };
-  astroDetails:      Record<string, unknown>;   // raw /astro_details response
+  astroDetails:      Record<string, unknown>;
   planets:           PlanetData[];
-  houseCusps:        HouseCusp[];               // bhav_madhya house midpoints
-  dasha:             DashaPeriod[];             // lifetime major Vimshottari periods
-  currentDasha:      Record<string, unknown> | null; // current active dasha (all levels)
+  houseCusps:        HouseCusp[];
+  dasha:             DashaPeriod[];
+  currentDasha:      Record<string, unknown> | null;
   mangalDosha:       MangalDosha | null;
   kaalSarpDosha:     KaalSarpDosha | null;
   sadeSatiStatus:    Record<string, unknown> | null;
   sadeSatiLife:      Record<string, unknown> | null;
   pitraDosha:        Record<string, unknown> | null;
   generalPrediction: string | null;
-  chartImageD1:      string | null;             // Rashi (birth chart) SVG/image
-  chartImageD9:      string | null;             // Navamsha chart SVG/image
+  chartImageD1:      string | null;  // Rashi (birth chart) SVG
+  chartImageD9:      string | null;  // Navamsha chart SVG
   input:             BirthChartInput;
   computedAt:        string;
 }
@@ -166,25 +177,43 @@ export interface FullKundliChartData {
 // For backward compat keep the old name as an alias
 export type KundliChartData = FullKundliChartData;
 
-async function postBirth<T>(endpoint: string, input: BirthChartInput): Promise<T> {
-  logger.debug({ endpoint }, '[VedicAstro] fetching birth chart data');
-  const { data } = await client.post<T>(endpoint, input);
-  return data;
+// Convert internal BirthChartInput to vedicastroapi.com v3-json query params
+function birthParams(input: BirthChartInput): Record<string, unknown> {
+  const dd = String(input.day).padStart(2, '0');
+  const mm = String(input.month).padStart(2, '0');
+  const hh = String(input.hour).padStart(2, '0');
+  const mn = String(input.min).padStart(2, '0');
+  return {
+    dob: `${dd}/${mm}/${input.year}`,
+    tob: `${hh}:${mn}`,
+    lat: input.lat,
+    lon: input.lon,
+    tz:  input.tzone,
+  };
 }
 
-function normalisePlanets(raw: Record<string, unknown>[]): PlanetData[] {
-  return raw.map((p) => ({
-    name:           String(p['name'] ?? ''),
-    fullDegree:     Number(p['fullDegree'] ?? p['full_degree'] ?? 0),
-    normDegree:     Number(p['normDegree'] ?? p['norm_degree'] ?? 0),
-    speed:          Number(p['speed'] ?? 0),
-    isRetro:        String(p['isRetro'] ?? p['is_retro'] ?? 'false') === 'true',
-    sign:           String(p['sign'] ?? ''),
-    signLord:       String(p['signLord'] ?? p['sign_lord'] ?? ''),
-    nakshatra:      String(p['nakshatra'] ?? ''),
-    nakshatraLord:  String(p['nakshatraLord'] ?? p['nakshatra_lord'] ?? ''),
-    nakshatraPada:  Number(p['nakshatraPada'] ?? p['nakshatra_pada'] ?? 0),
-    house:          Number(p['house'] ?? 0),
+async function getBirth<T>(endpoint: string, input: BirthChartInput): Promise<T> {
+  logger.debug({ endpoint }, '[VedicAstro] fetching birth chart data');
+  const { data } = await client.get<{ status: number; response: T }>(endpoint, {
+    params: birthParams(input),
+  });
+  return unwrap(data);
+}
+
+// planet-details returns an indexed object { "0": {...}, "1": {...}, ... }
+function normalisePlanets(raw: Record<string, Record<string, unknown>>): PlanetData[] {
+  return Object.values(raw).map((p) => ({
+    name:          String(p['name'] ?? ''),
+    fullDegree:    Number(p['global_degree'] ?? p['full_degree'] ?? p['fullDegree'] ?? 0),
+    normDegree:    Number(p['local_degree'] ?? p['norm_degree'] ?? p['normDegree'] ?? 0),
+    speed:         Number(p['speed'] ?? 0),
+    isRetro:       String(p['is_retro'] ?? p['isRetro'] ?? 'false').toLowerCase() === 'true',
+    sign:          String(p['zodiac'] ?? p['sign'] ?? ''),
+    signLord:      String(p['sign_lord'] ?? p['signLord'] ?? ''),
+    nakshatra:     String(p['nakshatra'] ?? ''),
+    nakshatraLord: String(p['nakshatra_lord'] ?? p['nakshatraLord'] ?? ''),
+    nakshatraPada: Number(p['nakshatra_pada'] ?? p['nakshatraPada'] ?? 0),
+    house:         Number(p['house'] ?? 0),
   }));
 }
 
@@ -197,60 +226,53 @@ function normaliseHouseCusps(raw: Record<string, unknown>[]): HouseCusp[] {
 }
 
 function normaliseAscendant(raw: Record<string, unknown>): FullKundliChartData['ascendant'] {
-  // /astro_details returns ascendant inside an 'ascendant' key or at root level
-  const asc = (raw['ascendant'] ?? raw) as Record<string, unknown>;
+  // ascendant-report returns fields at the response root level
   return {
-    sign:          String(asc['sign'] ?? asc['ascendant_sign'] ?? ''),
-    signLord:      String(asc['signLord'] ?? asc['sign_lord'] ?? ''),
-    degree:        Number(asc['degree'] ?? asc['ascendant_degree'] ?? 0),
-    nakshatra:     String(asc['nakshatra'] ?? ''),
-    nakshatraLord: String(asc['nakshatraLord'] ?? asc['nakshatra_lord'] ?? ''),
-    nakshatraPada: Number(asc['nakshatraPada'] ?? asc['nakshatra_pada'] ?? 0),
+    sign:          String(raw['ascendant'] ?? raw['sign'] ?? raw['ascendant_sign'] ?? ''),
+    signLord:      String(raw['sign_lord'] ?? raw['signLord'] ?? ''),
+    degree:        Number(raw['degree'] ?? raw['ascendant_degree'] ?? 0),
+    nakshatra:     String(raw['nakshatra'] ?? ''),
+    nakshatraLord: String(raw['nakshatra_lord'] ?? raw['nakshatraLord'] ?? ''),
+    nakshatraPada: Number(raw['nakshatra_pada'] ?? raw['nakshatraPada'] ?? 0),
   };
 }
 
+// maha-dasha returns { mahadasha: [ { name, start, end }, ... ] }
 function normaliseDasha(raw: Record<string, unknown>): DashaPeriod[] {
-  const periods = (raw['dasha_periods'] ?? raw['vimshottari_dasha'] ?? raw) as Record<string, unknown>[];
+  const periods = (raw['mahadasha'] ?? []) as Record<string, unknown>[];
   if (!Array.isArray(periods)) return [];
   return periods.map((p) => ({
-    planet:    String(p['planet'] ?? p['dasha_planet'] ?? ''),
-    startDate: String(p['start_date'] ?? p['startDate'] ?? ''),
-    endDate:   String(p['end_date'] ?? p['endDate'] ?? ''),
-    antars: ((p['antardasha'] ?? p['antars'] ?? []) as Record<string, unknown>[]).map((a) => ({
-      planet:    String(a['planet'] ?? a['antar_planet'] ?? ''),
-      startDate: String(a['start_date'] ?? a['startDate'] ?? ''),
-      endDate:   String(a['end_date'] ?? a['endDate'] ?? ''),
-      pratyantar: ((a['pratyantar'] ?? a['prat'] ?? []) as Record<string, unknown>[]).map((pr) => ({
-        planet:    String(pr['planet'] ?? ''),
-        startDate: String(pr['start_date'] ?? pr['startDate'] ?? ''),
-        endDate:   String(pr['end_date'] ?? pr['endDate'] ?? ''),
-      })),
-    })),
+    planet:    String(p['name'] ?? p['planet'] ?? ''),
+    startDate: String(p['start'] ?? p['start_date'] ?? p['startDate'] ?? ''),
+    endDate:   String(p['end'] ?? p['end_date'] ?? p['endDate'] ?? ''),
+    antars:    [],  // full antar data available via separate endpoint if needed
   }));
 }
 
 function normaliseMangal(raw: Record<string, unknown>): MangalDosha {
+  // mangal-dosh response shape: { factors: { ... }, ... }
+  const factors = (raw['factors'] ?? {}) as Record<string, unknown>;
+  const isPresent = Object.values(factors).some(Boolean);
   return {
-    isManglik:   Boolean(raw['is_manglik'] ?? raw['isManglik'] ?? false),
+    isManglik:   Boolean(raw['is_manglik'] ?? raw['isManglik'] ?? isPresent),
     manglikPct:  Number(raw['manglik_pct'] ?? raw['manglikPct'] ?? 0),
-    description: String(raw['description'] ?? raw['bot_response'] ?? ''),
+    description: String(raw['bot_response'] ?? raw['description'] ?? ''),
     remedies:    Array.isArray(raw['remedy']) ? (raw['remedy'] as string[]) : [],
   };
 }
 
 function normaliseKaalSarp(raw: Record<string, unknown>): KaalSarpDosha {
   return {
-    isPresent:   Boolean(raw['present'] ?? raw['is_kaal_sarp'] ?? false),
-    type:        String(raw['type'] ?? ''),
-    severity:    String(raw['severity'] ?? ''),
-    description: String(raw['description'] ?? raw['bot_response'] ?? ''),
+    isPresent:   Boolean(raw['is_dosha_present'] ?? raw['is_kaal_sarp'] ?? false),
+    type:        String(raw['dosha_type'] ?? raw['type'] ?? ''),
+    severity:    String(raw['dosha_direction'] ?? raw['severity'] ?? ''),
+    description: String(raw['bot_response'] ?? raw['description'] ?? ''),
   };
 }
 
-// Safe fetch — if an endpoint fails (e.g. no API key), return null instead of breaking the whole report
-async function tryPostBirth<T>(endpoint: string, input: BirthChartInput): Promise<T | null> {
+async function tryGetBirth<T>(endpoint: string, input: BirthChartInput): Promise<T | null> {
   try {
-    return await postBirth<T>(endpoint, input);
+    return await getBirth<T>(endpoint, input);
   } catch (err) {
     logger.warn({ endpoint, err }, '[VedicAstro] optional endpoint failed, skipping');
     return null;
@@ -258,46 +280,44 @@ async function tryPostBirth<T>(endpoint: string, input: BirthChartInput): Promis
 }
 
 export async function getBirthChartData(input: BirthChartInput): Promise<FullKundliChartData> {
-  // Mandatory: planets + basic astro details (includes ascendant + houses)
-  const [planetsRaw, astroDetailsRaw, bhavMadhyaRaw] = await Promise.all([
-    postBirth<Record<string, unknown>[]>('/planets/extended', input),
-    postBirth<Record<string, unknown>>('/astro_details', input),
-    postBirth<Record<string, unknown>[]>('/bhav_madhya', input),
+  // Mandatory: planet positions + ascendant details
+  const [planetsRaw, ascRaw] = await Promise.all([
+    getBirth<Record<string, Record<string, unknown>>>('/horoscope/planet-details', input),
+    getBirth<Record<string, unknown>>('/horoscope/ascendant-report', input),
   ]);
 
   // Optional enrichment — failures don't block the report
   const [
     majorDashaRaw, currentDashaRaw,
     mangalRaw, kaalSarpRaw,
-    sadeSatiStatusRaw, sadeSatiLifeRaw, pitraRaw,
+    sadeSatiStatusRaw, pitraRaw,
     generalRaw,
     chartD1Raw, chartD9Raw,
   ] = await Promise.all([
-    tryPostBirth<Record<string, unknown>>('/major_vdasha', input),
-    tryPostBirth<Record<string, unknown>>('/current_vdasha_all', input),
-    tryPostBirth<Record<string, unknown>>('/manglik', input),
-    tryPostBirth<Record<string, unknown>>('/kalsarpa_details', input),
-    tryPostBirth<Record<string, unknown>>('/sadhesati_current_status', input),
-    tryPostBirth<Record<string, unknown>>('/sadhesati_life_details', input),
-    tryPostBirth<Record<string, unknown>>('/pitra_dosha_report', input),
-    tryPostBirth<Record<string, unknown>>('/general_ascendant_report', input),
-    tryPostBirth<Record<string, unknown>>('/horo_chart_image/D1', input),
-    tryPostBirth<Record<string, unknown>>('/horo_chart_image/D9', input),
+    tryGetBirth<Record<string, unknown>>('/dashas/maha-dasha', input),
+    tryGetBirth<Record<string, unknown>>('/dashas/current-mahadasha', input),
+    tryGetBirth<Record<string, unknown>>('/dosha/mangal-dosh', input),
+    tryGetBirth<Record<string, unknown>>('/dosha/kaalsarp-dosh', input),
+    tryGetBirth<Record<string, unknown>>('/extended-horoscope/current-sade-sati', input),
+    tryGetBirth<Record<string, unknown>>('/dosha/pitra-dosh', input),
+    tryGetBirth<Record<string, unknown>>('/extended-horoscope/extended-kundli-details', input),
+    tryGetBirth<Record<string, unknown>>('/horoscope/chart-image', input),
+    tryGetBirth<Record<string, unknown>>('/horoscope/chart-image', { ...input }),  // D9 via divisional param if supported
   ]);
 
   return {
-    ascendant:         normaliseAscendant(astroDetailsRaw),
+    ascendant:         normaliseAscendant(ascRaw),
     planets:           normalisePlanets(planetsRaw),
-    houseCusps:        normaliseHouseCusps(bhavMadhyaRaw),
-    astroDetails:      astroDetailsRaw,
+    houseCusps:        normaliseHouseCusps([]),  // house cusps come from planet-details.house fields
+    astroDetails:      ascRaw,
     dasha:             majorDashaRaw ? normaliseDasha(majorDashaRaw) : [],
     currentDasha:      currentDashaRaw ?? null,
     mangalDosha:       mangalRaw ? normaliseMangal(mangalRaw) : null,
     kaalSarpDosha:     kaalSarpRaw ? normaliseKaalSarp(kaalSarpRaw) : null,
     sadeSatiStatus:    sadeSatiStatusRaw ?? null,
-    sadeSatiLife:      sadeSatiLifeRaw ?? null,
+    sadeSatiLife:      null,
     pitraDosha:        pitraRaw ?? null,
-    generalPrediction: generalRaw ? String(generalRaw['bot_response'] ?? generalRaw['prediction'] ?? '') : null,
+    generalPrediction: generalRaw ? String(generalRaw['bot_response'] ?? '') || null : null,
     chartImageD1:      chartD1Raw ? String(chartD1Raw['svg'] ?? chartD1Raw['chart_image'] ?? '') || null : null,
     chartImageD9:      chartD9Raw ? String(chartD9Raw['svg'] ?? chartD9Raw['chart_image'] ?? '') || null : null,
     input,

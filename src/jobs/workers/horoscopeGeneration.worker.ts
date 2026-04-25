@@ -4,11 +4,9 @@
 // Falls back from VedicAstroAPI to Claude AI if API call fails or is unconfigured.
 
 import { Worker, type Job } from 'bullmq';
-import { eq, and } from 'drizzle-orm';
 import Anthropic from '@anthropic-ai/sdk';
 import { redis } from '../../lib/redis.js';
-import { db } from '../../db/client.js';
-import { horoscopes } from '../../db/schema/content.js';
+import { prisma } from '../../db/client.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { reportError } from '../../observability/errorReporter.js';
@@ -68,12 +66,8 @@ async function fetchVedic(sign: ZodiacSign, period: string): Promise<VedicHorosc
 // ── Upsert one horoscope row ──────────────────────────────────────────────────
 
 async function upsertHoroscope(h: VedicHoroscope, period: string, periodKey: string, source: string) {
-  const existing = await db.query.horoscopes.findFirst({
-    where: and(
-      eq(horoscopes.sign, h.sign),
-      eq(horoscopes.period, period),
-      eq(horoscopes.periodKey, periodKey),
-    ),
+  const existing = await prisma.horoscope.findFirst({
+    where: { sign: h.sign, period, periodKey },
   });
 
   const sections = {
@@ -85,8 +79,9 @@ async function upsertHoroscope(h: VedicHoroscope, period: string, periodKey: str
   };
 
   if (existing) {
-    await db.update(horoscopes)
-      .set({
+    await prisma.horoscope.update({
+      where: { id: existing.id },
+      data: {
         content: h.general,
         sections,
         luckyColor: h.luckyColor ?? null,
@@ -95,24 +90,24 @@ async function upsertHoroscope(h: VedicHoroscope, period: string, periodKey: str
         source,
         generatedAt: new Date(),
         updatedAt: new Date(),
-        // Auto-publish if not already manually unpublished (existing ones keep their state
-        // unless this is a fresh insert — we publish on first generation)
-      })
-      .where(eq(horoscopes.id, existing.id));
+      },
+    });
   } else {
-    await db.insert(horoscopes).values({
-      sign: h.sign,
-      period,
-      periodKey,
-      date: period === 'daily' ? periodKey : '',
-      content: h.general,
-      sections,
-      luckyColor: h.luckyColor ?? null,
-      luckyNumber: h.luckyNumber ?? null,
-      luckyDay: h.luckyDay ?? null,
-      source,
-      isPublished: true,
-      generatedAt: new Date(),
+    await prisma.horoscope.create({
+      data: {
+        sign: h.sign,
+        period,
+        periodKey,
+        date: period === 'daily' ? periodKey : '',
+        content: h.general,
+        sections,
+        luckyColor: h.luckyColor ?? null,
+        luckyNumber: h.luckyNumber ?? null,
+        luckyDay: h.luckyDay ?? null,
+        source,
+        isPublished: true,
+        generatedAt: new Date(),
+      },
     });
   }
 }
@@ -120,7 +115,7 @@ async function upsertHoroscope(h: VedicHoroscope, period: string, periodKey: str
 // ── Worker ─────────────────────────────────────────────────────────────────────
 
 export function startHoroscopeWorker() {
-  const useVedicApi = !!(env.VEDIC_ASTRO_API_USER_ID && env.VEDIC_ASTRO_API_KEY);
+  const useVedicApi = !!env.VEDIC_ASTRO_API_KEY;
 
   const worker = new Worker<HoroscopeJobData>(
     'horoscopeGeneration',
@@ -148,7 +143,6 @@ export function startHoroscopeWorker() {
           await upsertHoroscope(horoscope, period, periodKey, source);
           results.push(sign);
 
-          // Brief pause between signs to stay within API rate limits
           await new Promise((r) => setTimeout(r, 300));
         } catch (err) {
           logger.error({ sign, period, err }, '[HoroscopeWorker] failed for sign, continuing');
@@ -167,7 +161,7 @@ export function startHoroscopeWorker() {
     },
     {
       connection: redis,
-      concurrency: 1, // single-threaded to avoid API rate limits
+      concurrency: 1,
     },
   );
 

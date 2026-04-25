@@ -1,9 +1,7 @@
 // Admin horoscopes service: CRUD + bulk generation + publish/unpublish.
 // Bulk generation enqueues a BullMQ job — it never blocks the HTTP handler.
 
-import { eq, and, gte, lte, desc } from 'drizzle-orm';
-import { db } from '../../db/client.js';
-import { horoscopes } from '../../db/schema/content.js';
+import { prisma } from '../../db/client.js';
 import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../observability/auditLogger.js';
 import { horoscopeQueue } from '../../jobs/queues.js';
@@ -18,36 +16,42 @@ import type {
 // ── List ──────────────────────────────────────────────────────────────────────
 
 export async function listHoroscopes(q: HoroscopeListQuery) {
-  const rows = await db.query.horoscopes.findMany({
-    where: (t, { and: _and, eq: _eq, gte: _gte, lte: _lte }) => {
-      const conditions = [];
-      if (q.sign)        conditions.push(_eq(t.sign, q.sign));
-      if (q.period)      conditions.push(_eq(t.period, q.period));
-      if (q.periodKey)   conditions.push(_eq(t.periodKey, q.periodKey));
-      if (q.isPublished !== undefined) conditions.push(_eq(t.isPublished, q.isPublished));
-      if (q.from)        conditions.push(_gte(t.createdAt, new Date(q.from)));
-      if (q.to)          conditions.push(_lte(t.createdAt, new Date(q.to)));
-      return conditions.length ? _and(...conditions) : undefined;
-    },
-    orderBy: (t) => [desc(t.createdAt)],
-    limit: q.limit ?? 20,
-    offset: ((q.page ?? 1) - 1) * (q.limit ?? 20),
+  const limit = q.limit ?? 20;
+  const offset = ((q.page ?? 1) - 1) * limit;
+
+  const where: Record<string, unknown> = {};
+  if (q.sign) where['sign'] = q.sign;
+  if (q.period) where['period'] = q.period;
+  if (q.periodKey) where['periodKey'] = q.periodKey;
+  if (q.isPublished !== undefined) where['isPublished'] = q.isPublished;
+  if (q.from || q.to) {
+    const createdAt: Record<string, Date> = {};
+    if (q.from) createdAt['gte'] = new Date(q.from);
+    if (q.to) createdAt['lte'] = new Date(q.to);
+    where['createdAt'] = createdAt;
+  }
+
+  const rows = await prisma.horoscope.findMany({
+    where,
+    orderBy: { createdAt: 'desc' },
+    skip: offset,
+    take: limit,
   });
 
-  const total = rows.length; // good enough for now — swap for COUNT(*) if perf matters
+  const total = rows.length;
   return {
     items: rows,
     page: q.page ?? 1,
-    limit: q.limit ?? 20,
+    limit,
     total,
-    totalPages: Math.ceil(total / (q.limit ?? 20)),
+    totalPages: Math.ceil(total / limit),
   };
 }
 
 // ── Get one ───────────────────────────────────────────────────────────────────
 
 export async function getHoroscope(id: string) {
-  const row = await db.query.horoscopes.findFirst({ where: eq(horoscopes.id, id) });
+  const row = await prisma.horoscope.findFirst({ where: { id } });
   if (!row) throw new AppError('NOT_FOUND', `Horoscope ${id} not found.`, 404);
   return row;
 }
@@ -55,20 +59,22 @@ export async function getHoroscope(id: string) {
 // ── Create ────────────────────────────────────────────────────────────────────
 
 export async function createHoroscope(adminId: string, input: CreateHoroscopeInput) {
-  const [row] = await db.insert(horoscopes).values({
-    sign: input.sign,
-    period: input.period,
-    periodKey: input.periodKey,
-    date: input.period === 'daily' ? input.periodKey : '',
-    content: input.content,
-    sections: input.sections ?? null,
-    luckyColor: input.luckyColor ?? null,
-    luckyNumber: input.luckyNumber ?? null,
-    luckyDay: input.luckyDay ?? null,
-    isPublished: input.isPublished,
-    source: 'manual',
-    generatedAt: new Date(),
-  }).returning();
+  const row = await prisma.horoscope.create({
+    data: {
+      sign: input.sign,
+      period: input.period,
+      periodKey: input.periodKey,
+      date: input.period === 'daily' ? input.periodKey : '',
+      content: input.content,
+      sections: input.sections ?? undefined,
+      luckyColor: input.luckyColor ?? null,
+      luckyNumber: input.luckyNumber ?? null,
+      luckyDay: input.luckyDay ?? null,
+      isPublished: input.isPublished,
+      source: 'manual',
+      generatedAt: new Date(),
+    },
+  });
 
   await writeAuditLog({
     actorType: 'admin',
@@ -88,18 +94,15 @@ export async function createHoroscope(adminId: string, input: CreateHoroscopeInp
 export async function updateHoroscope(adminId: string, id: string, input: UpdateHoroscopeInput) {
   const existing = await getHoroscope(id);
 
-  const [updated] = await db.update(horoscopes)
-    .set({
-      ...(input.content !== undefined && { content: input.content }),
-      ...(input.sections !== undefined && { sections: input.sections }),
-      ...(input.luckyColor !== undefined && { luckyColor: input.luckyColor }),
-      ...(input.luckyNumber !== undefined && { luckyNumber: input.luckyNumber }),
-      ...(input.luckyDay !== undefined && { luckyDay: input.luckyDay }),
-      ...(input.isPublished !== undefined && { isPublished: input.isPublished }),
-      updatedAt: new Date(),
-    })
-    .where(eq(horoscopes.id, id))
-    .returning();
+  const data: Record<string, unknown> = { updatedAt: new Date() };
+  if (input.content !== undefined) data['content'] = input.content;
+  if (input.sections !== undefined) data['sections'] = input.sections;
+  if (input.luckyColor !== undefined) data['luckyColor'] = input.luckyColor;
+  if (input.luckyNumber !== undefined) data['luckyNumber'] = input.luckyNumber;
+  if (input.luckyDay !== undefined) data['luckyDay'] = input.luckyDay;
+  if (input.isPublished !== undefined) data['isPublished'] = input.isPublished;
+
+  const updated = await prisma.horoscope.update({ where: { id }, data });
 
   await writeAuditLog({
     actorType: 'admin',
@@ -120,7 +123,7 @@ export async function updateHoroscope(adminId: string, id: string, input: Update
 export async function deleteHoroscope(adminId: string, id: string) {
   const existing = await getHoroscope(id);
 
-  await db.delete(horoscopes).where(eq(horoscopes.id, id));
+  await prisma.horoscope.delete({ where: { id } });
 
   await writeAuditLog({
     actorType: 'admin',
@@ -138,9 +141,7 @@ export async function deleteHoroscope(adminId: string, id: string) {
 export async function setPublished(adminId: string, id: string, input: SetPublishedInput) {
   const existing = await getHoroscope(id);
 
-  await db.update(horoscopes)
-    .set({ isPublished: input.isPublished, updatedAt: new Date() })
-    .where(eq(horoscopes.id, id));
+  await prisma.horoscope.update({ where: { id }, data: { isPublished: input.isPublished, updatedAt: new Date() } });
 
   await writeAuditLog({
     actorType: 'admin',

@@ -8,7 +8,7 @@ import { ListQuerySchema } from '../shared/listQuery.js';
 export const CustomerListQuerySchema = ListQuerySchema.extend({
   isBlocked: z.coerce.boolean().optional().describe('Filter by blocked status'),
   signupSince: z.string().datetime().optional().describe('Only customers created after this ISO 8601 timestamp'),
-  minSpend: z.coerce.number().int().min(0).optional().describe('Minimum lifetime spend in paise'),
+  minSpend: z.coerce.number().int().min(0).optional().describe('Minimum lifetime spend'),
 });
 
 export type CustomerListQuery = z.infer<typeof CustomerListQuerySchema>;
@@ -24,7 +24,7 @@ export type BlockCustomerInput = z.infer<typeof BlockCustomerSchema>;
 // ── Wallet credit ─────────────────────────────────────────────────────────────
 
 export const WalletAdjustSchema = z.object({
-  amount: z.number().int().positive().describe('Amount to credit in paise — must be positive integer'),
+  amount: z.number().int().positive().describe('Amount to credit — must be positive integer'),
   reason: z.string().min(3).describe('Mandatory reason for audit trail'),
   type: z.enum(['GOODWILL', 'COMPENSATION', 'BONUS', 'ADMIN_ADJUST']).describe('Transaction sub-type'),
 });

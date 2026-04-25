@@ -1,5 +1,4 @@
-import { db } from '../../db/client.js';
-import * as consultRepo from './consultations.repository.js';
+import { prisma } from '../../db/client.js';
 import { debitWallet } from '../wallet/wallet.service.js';
 import { AppError } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
@@ -11,7 +10,7 @@ export function startBillingTicker(
   consultationId: string,
   customerId: string,
   pricePerMin: number,
-  onLowBalance: (secondsLeft: number, balance: bigint) => void,
+  onLowBalance: (secondsLeft: number, balance: number) => void,
   onAutoEnd: (reason: string) => void,
 ): void {
   if (activeTimers.has(consultationId)) return;
@@ -22,25 +21,25 @@ export function startBillingTicker(
     try {
       const idempotencyKey = `billing:${consultationId}:${Date.now()}`;
 
-      await db.transaction(async (tx) => {
+      await prisma.$transaction(async (tx) => {
         await debitWallet(customerId, pricePerMin, idempotencyKey, 'consultation', consultationId, tx);
       });
 
-      const wallet = await db.query.wallets.findFirst({
-        where: (t, { eq }) => eq(t.customerId, customerId),
-        columns: { balance: true },
+      const wallet = await prisma.wallet.findFirst({
+        where: { customerId },
+        select: { balance: true },
       });
 
       if (!wallet) return;
 
-      const remainingMinutes = Number(wallet.balance) / pricePerMin;
+      const remainingMinutes = wallet.balance / pricePerMin;
       const secondsLeft = Math.floor(remainingMinutes * 60);
 
       if (secondsLeft <= 60) {
         onLowBalance(secondsLeft, wallet.balance);
       }
 
-      if (wallet.balance < BigInt(pricePerMin)) {
+      if (wallet.balance < pricePerMin) {
         stopBillingTicker(consultationId);
         onAutoEnd('lowBalance');
       }

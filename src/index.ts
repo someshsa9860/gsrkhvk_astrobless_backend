@@ -1,3 +1,11 @@
+// Prisma returns BigInt for bigint DB columns (money fields, viewCount, etc.).
+// Fastify serializes responses with JSON.stringify, which can't handle BigInt.
+// Patching prototype here — before any module loads — converts all BigInts to
+// Number at serialization time. All money values fit safely in Number (< 2^53).
+(BigInt.prototype as unknown as { toJSON(): number }).toJSON = function () {
+  return Number(this);
+};
+
 import * as Sentry from '@sentry/node';
 import { buildApp } from './app.js';
 import { env } from './config/env.js';

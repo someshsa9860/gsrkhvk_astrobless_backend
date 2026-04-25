@@ -1,41 +1,36 @@
 import * as dotenv from 'dotenv';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import postgres from 'postgres';
-import * as schema from '../schema/index.js';
-
 dotenv.config();
 
-const DATABASE_URL = process.env['DATABASE_URL'];
-if (!DATABASE_URL) {
+import { prisma } from '../client.js';
+import { AdminPermission } from '../../admin/shared/rbac.js';
+import { seedLanguagesAndSkills } from './languagesSkillsSeed.js';
+
+if (!process.env['DATABASE_URL']) {
   console.error('DATABASE_URL is required');
   process.exit(1);
 }
 
-const client = postgres(DATABASE_URL, { max: 1 });
-const db = drizzle(client, { schema });
-
-// Default admin from env — idempotent, safe to re-run.
 const SEED_ADMIN_EMAIL = process.env['SEED_ADMIN_EMAIL'] ?? 'tech@callvcal.com';
+const ALL_PERMISSIONS = Object.values(AdminPermission);
 
 async function seedAdmin(): Promise<void> {
-  const existing = await db.query.admins.findFirst({
-    where: (a, { eq }) => eq(a.email, SEED_ADMIN_EMAIL!),
+  await prisma.admin.upsert({
+    where: { email: SEED_ADMIN_EMAIL },
+    update: {
+      role: 'superAdmin',
+      isActive: true,
+      customPermissions: ALL_PERMISSIONS,
+    },
+    create: {
+      email: SEED_ADMIN_EMAIL,
+      name: process.env['SEED_ADMIN_NAME'] ?? 'Super Admin',
+      role: 'superAdmin',
+      isActive: true,
+      customPermissions: ALL_PERMISSIONS,
+    },
   });
 
-  if (existing) {
-    console.log(`Admin ${SEED_ADMIN_EMAIL} already exists (id: ${existing.id}) — skipping.`);
-    return;
-  }
-
-  await db.insert(schema.admins).values({
-    email: SEED_ADMIN_EMAIL!,
-    name: process.env['SEED_ADMIN_NAME'] ?? 'Super Admin',
-    role: 'superAdmin',
-    totpEnrolled: false,
-    isActive: true,
-  });
-
-  console.log(`Created super admin: ${SEED_ADMIN_EMAIL}`);
+  console.log(`Upserted super admin: ${SEED_ADMIN_EMAIL} (all ${ALL_PERMISSIONS.length} permissions granted)`);
 }
 
 async function seedAppSettings(): Promise<void> {
@@ -47,9 +42,9 @@ async function seedAppSettings(): Promise<void> {
       category: 'finance',
     },
     {
-      key: 'wallet.minBalanceFiveMinPaise',
+      key: 'wallet.minBalanceFiveMin',
       value: 5000,
-      description: 'Minimum wallet balance required to start a 5-minute consultation (in paise)',
+      description: 'Minimum wallet balance required to start a 5-minute consultation',
       category: 'wallet',
     },
     {
@@ -65,9 +60,9 @@ async function seedAppSettings(): Promise<void> {
       category: 'consultation',
     },
     {
-      key: 'referral.signupBonusPaise',
+      key: 'referral.signupBonus',
       value: 5000,
-      description: 'Wallet credit (in paise) given to a new customer who signs up via referral link',
+      description: 'Wallet credit given to a new customer who signs up via referral link',
       category: 'referral',
     },
     {
@@ -77,9 +72,9 @@ async function seedAppSettings(): Promise<void> {
       category: 'feature',
     },
     {
-      key: 'aiChat.pricePerMessagePaise',
+      key: 'aiChat.pricePerMessage',
       value: 200,
-      description: 'Cost per AI chat message (in paise)',
+      description: 'Cost per AI chat message (stored in smallest currency unit: 1/100 of ₹1)',
       category: 'ai',
     },
     {
@@ -91,26 +86,44 @@ async function seedAppSettings(): Promise<void> {
     {
       key: 'kundli.showPreBirthDasha',
       value: false,
-      description: 'When true, Vimshottari dasha periods that ended before the native\'s birth date are included in the kundli report. When false (default), only post-birth periods are shown.',
+      description: "When true, Vimshottari dasha periods that ended before the native's birth date are included in the kundli report. When false (default), only post-birth periods are shown.",
       category: 'kundli',
     },
   ];
 
+  // Rename legacy keys
+  const renames: Record<string, string> = {
+    'aiChat.pricePerMessagePaise': 'aiChat.pricePerMessage',
+  };
+  for (const [oldKey, newKey] of Object.entries(renames)) {
+    const old = await prisma.appSetting.findFirst({ where: { key: oldKey } });
+    if (old) {
+      const newExists = await prisma.appSetting.findFirst({ where: { key: newKey } });
+      if (!newExists) {
+        await prisma.appSetting.update({ where: { id: old.id }, data: { key: newKey } });
+        console.log(`Renamed setting: ${oldKey} → ${newKey}`);
+      } else {
+        await prisma.appSetting.delete({ where: { id: old.id } });
+        console.log(`Deleted legacy setting: ${oldKey} (${newKey} already exists)`);
+      }
+    }
+  }
+
   for (const setting of defaults) {
-    const existing = await db.query.appSettings.findFirst({
-      where: (s, { eq }) => eq(s.key, setting.key),
-    });
+    const existing = await prisma.appSetting.findFirst({ where: { key: setting.key } });
 
     if (existing) {
       console.log(`Setting ${setting.key} already exists — skipping.`);
       continue;
     }
 
-    await db.insert(schema.appSettings).values({
-      key: setting.key,
-      value: setting.value,
-      description: setting.description,
-      category: setting.category,
+    await prisma.appSetting.create({
+      data: {
+        key: setting.key,
+        value: setting.value,
+        description: setting.description,
+        category: setting.category,
+      },
     });
 
     console.log(`Seeded setting: ${setting.key} = ${JSON.stringify(setting.value)}`);
@@ -121,8 +134,9 @@ async function main(): Promise<void> {
   console.log('Running seed...');
   await seedAdmin();
   await seedAppSettings();
+  await seedLanguagesAndSkills();
   console.log('Seed complete.');
-  await client.end();
+  await prisma.$disconnect();
 }
 
 main().catch((err) => {

@@ -1,10 +1,6 @@
-import { eq, and } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import * as bcrypt from 'bcrypt';
-import { db } from '../../db/client.js';
-import { customers, customerAuthIdentities } from '../../db/schema/customers.js';
-import { authSessions } from '../../db/schema/authSessions.js';
-import { wallets } from '../../db/schema/wallet.js';
+import { prisma } from '../../db/client.js';
 import { issueTokenPair } from '../../lib/jwt.js';
 import { JWT_AUDIENCE } from '../../config/constants.js';
 import { storeOtp, verifyAndConsumeOtp } from '../../lib/otp.js';
@@ -19,6 +15,7 @@ import { verifyGoogleToken, verifyAppleToken } from '../../lib/tokenVerifier.js'
 import { upsertAppleCredential } from '../../lib/appleCredentials.js';
 import { env } from '../../config/env.js';
 import type { TokenPair } from '../../lib/jwt.js';
+import type { Prisma } from '@prisma/client';
 
 export interface DeviceInfo {
   deviceId?: string;
@@ -35,7 +32,6 @@ const OTP_EMAIL_TTL = 10 * 60;
 export async function sendPhoneOtp(phone: string): Promise<void> {
   const otp = await storeOtp(PERSONA, 'phone', phone, OTP_PHONE_TTL);
   logger.info({ phone: phone.slice(-4) }, 'Customer phone OTP generated');
-  // TODO: send via MSG91
   if (process.env['NODE_ENV'] !== 'production') logger.debug({ otp }, 'DEV OTP');
 }
 
@@ -43,48 +39,42 @@ export async function verifyPhoneOtp(phone: string, otp: string, name?: string, 
   await verifyAndConsumeOtp(PERSONA, 'phone', phone, otp);
   const geo = lookupIp(ipAddress);
   const ctx = getContext();
-  const device: DeviceInfo = {
-    deviceId: ctx.deviceId,
-    deviceModel: ctx.deviceModel,
-    deviceName: ctx.deviceName,
-    osName: ctx.osName,
-    osVersion: ctx.osVersion,
-  };
+  const device: DeviceInfo = { deviceId: ctx.deviceId, deviceModel: ctx.deviceModel, deviceName: ctx.deviceName, osName: ctx.osName, osVersion: ctx.osVersion };
 
-  return db.transaction(async (tx) => {
-    let customer = await tx.query.customers.findFirst({ where: eq(customers.phone, phone) });
+  return prisma.$transaction(async (tx) => {
+    let customer = await tx.customer.findFirst({ where: { phone } });
     let isNew = false;
 
     if (!customer) {
       isNew = true;
-      [customer] = await tx.insert(customers).values({
-        phone, name: name ?? null,
-        referralCode: uuidv4().slice(0, 8).toUpperCase(),
-        registrationCity: geo.city,
-        registrationState: geo.state,
-        registrationCountry: geo.country,
-        registrationCountryCode: geo.countryCode,
-      }).returning();
-      await tx.insert(customerAuthIdentities).values({ customerId: customer!.id, providerKey: 'phoneOtp', providerUserId: phone });
-      await tx.insert(wallets).values({ customerId: customer!.id });
+      customer = await tx.customer.create({
+        data: {
+          phone,
+          name: name ?? null,
+          referralCode: uuidv4().slice(0, 8).toUpperCase(),
+          registrationCity: geo.city,
+          registrationState: geo.state,
+          registrationCountry: geo.country,
+          registrationCountryCode: geo.countryCode,
+        },
+      });
+      await tx.customerAuthIdentity.create({ data: { customerId: customer.id, providerKey: 'phoneOtp', providerUserId: phone } });
+      await tx.wallet.create({ data: { customerId: customer.id } });
     }
 
-    const session = await createSession(tx, customer!.id, 'customer', device);
+    const session = await createSession(tx, customer.id, 'customer', device);
     await writeAuditLog({
-      actorType: 'customer', actorId: customer!.id, action: isNew ? 'customer.signup' : 'customer.login',
-      targetType: 'customer', targetId: customer!.id, summary: isNew ? 'Signed up via phone OTP' : 'Login via phone OTP',
+      actorType: 'customer', actorId: customer.id,
+      action: isNew ? 'customer.signup' : 'customer.login',
+      targetType: 'customer', targetId: customer.id,
+      summary: isNew ? 'Signed up via phone OTP' : 'Login via phone OTP',
     }, tx);
 
     if (isNew) {
       broadcastAdminEvent('event:newSignup', {
-        persona: 'customer',
-        id: customer!.id,
-        name: customer!.name ?? 'New User',
-        city: geo.city,
-        country: geo.country,
-        countryCode: geo.countryCode,
-        method: 'phoneOtp',
-        registeredAt: new Date().toISOString(),
+        persona: 'customer', id: customer.id, name: customer.name ?? 'New User',
+        city: geo.city, country: geo.country, countryCode: geo.countryCode,
+        method: 'phoneOtp', registeredAt: new Date().toISOString(),
       });
     }
 
@@ -95,26 +85,26 @@ export async function verifyPhoneOtp(phone: string, otp: string, name?: string, 
 export async function emailSignup(email: string, password: string, name: string, ipAddress?: string): Promise<{ pendingVerification: true }> {
   assertPasswordStrength(password);
 
-  const existing = await db.query.customerAuthIdentities.findFirst({
-    where: and(eq(customerAuthIdentities.providerKey, 'emailPassword'), eq(customerAuthIdentities.providerUserId, email)),
+  const existing = await prisma.customerAuthIdentity.findFirst({
+    where: { providerKey: 'emailPassword', providerUserId: email },
   });
   if (existing) throw new AppError('CONFLICT', 'An account with this email already exists.', 409);
 
   const passwordHash = await hashPassword(password);
   const geo = lookupIp(ipAddress);
 
-  await db.transaction(async (tx) => {
-    const [customer] = await tx.insert(customers).values({
-      email, emailVerified: false, name,
-      referralCode: uuidv4().slice(0, 8).toUpperCase(),
-      registrationCity: geo.city,
-      registrationState: geo.state,
-      registrationCountry: geo.country,
-      registrationCountryCode: geo.countryCode,
-    }).returning();
-    await tx.insert(customerAuthIdentities).values({ customerId: customer!.id, providerKey: 'emailPassword', providerUserId: email, passwordHash });
-    await tx.insert(wallets).values({ customerId: customer!.id });
-    await writeAuditLog({ actorType: 'customer', actorId: customer!.id, action: 'customer.signup', summary: `Signed up via email` }, tx);
+  await prisma.$transaction(async (tx) => {
+    const customer = await tx.customer.create({
+      data: {
+        email, emailVerified: false, name,
+        referralCode: uuidv4().slice(0, 8).toUpperCase(),
+        registrationCity: geo.city, registrationState: geo.state,
+        registrationCountry: geo.country, registrationCountryCode: geo.countryCode,
+      },
+    });
+    await tx.customerAuthIdentity.create({ data: { customerId: customer.id, providerKey: 'emailPassword', providerUserId: email, passwordHash } });
+    await tx.wallet.create({ data: { customerId: customer.id } });
+    await writeAuditLog({ actorType: 'customer', actorId: customer.id, action: 'customer.signup', summary: 'Signed up via email' }, tx);
   });
 
   const otp = await storeOtp(PERSONA, 'email', email, OTP_EMAIL_TTL);
@@ -127,21 +117,15 @@ export async function emailSignup(email: string, password: string, name: string,
 export async function verifyEmailOtp(email: string, otp: string): Promise<TokenPair> {
   await verifyAndConsumeOtp(PERSONA, 'email', email, otp);
   const ctx = getContext();
-  const device: DeviceInfo = {
-    deviceId: ctx.deviceId,
-    deviceModel: ctx.deviceModel,
-    deviceName: ctx.deviceName,
-    osName: ctx.osName,
-    osVersion: ctx.osVersion,
-  };
+  const device: DeviceInfo = { deviceId: ctx.deviceId, deviceModel: ctx.deviceModel, deviceName: ctx.deviceName, osName: ctx.osName, osVersion: ctx.osVersion };
 
-  return db.transaction(async (tx) => {
-    const identity = await tx.query.customerAuthIdentities.findFirst({
-      where: and(eq(customerAuthIdentities.providerKey, 'emailPassword'), eq(customerAuthIdentities.providerUserId, email)),
+  return prisma.$transaction(async (tx) => {
+    const identity = await tx.customerAuthIdentity.findFirst({
+      where: { providerKey: 'emailPassword', providerUserId: email },
     });
     if (!identity) throw new AppError('NOT_FOUND', 'Account not found.', 404);
 
-    await tx.update(customers).set({ emailVerified: true }).where(eq(customers.id, identity.customerId));
+    await tx.customer.update({ where: { id: identity.customerId }, data: { emailVerified: true } });
     await writeAuditLog({ actorType: 'customer', actorId: identity.customerId, action: 'customer.emailVerified', summary: 'Email verified' }, tx);
 
     return createSession(tx, identity.customerId, 'customer', device);
@@ -149,30 +133,24 @@ export async function verifyEmailOtp(email: string, otp: string): Promise<TokenP
 }
 
 export async function emailLogin(email: string, password: string): Promise<TokenPair> {
-  const identity = await db.query.customerAuthIdentities.findFirst({
-    where: and(eq(customerAuthIdentities.providerKey, 'emailPassword'), eq(customerAuthIdentities.providerUserId, email)),
+  const identity = await prisma.customerAuthIdentity.findFirst({
+    where: { providerKey: 'emailPassword', providerUserId: email },
   });
   if (!identity || !identity.passwordHash) throw new AppError('AUTH_REQUIRED', 'Invalid credentials.', 401);
 
   const valid = await comparePassword(password, identity.passwordHash);
   if (!valid) throw new AppError('AUTH_REQUIRED', 'Invalid credentials.', 401);
 
-  const customer = await db.query.customers.findFirst({ where: eq(customers.id, identity.customerId) });
+  const customer = await prisma.customer.findFirst({ where: { id: identity.customerId } });
   if (!customer?.emailVerified) throw new AppError('EMAIL_NOT_VERIFIED', 'Please verify your email first.', 403);
   if (customer.isBlocked) throw new AppError('FORBIDDEN', 'Account is blocked.', 403);
 
-  await db.update(customerAuthIdentities).set({ lastUsedAt: new Date() }).where(eq(customerAuthIdentities.id, identity.id));
+  await prisma.customerAuthIdentity.update({ where: { id: identity.id }, data: { lastUsedAt: new Date() } });
 
   const ctx = getContext();
-  const device: DeviceInfo = {
-    deviceId: ctx.deviceId,
-    deviceModel: ctx.deviceModel,
-    deviceName: ctx.deviceName,
-    osName: ctx.osName,
-    osVersion: ctx.osVersion,
-  };
+  const device: DeviceInfo = { deviceId: ctx.deviceId, deviceModel: ctx.deviceModel, deviceName: ctx.deviceName, osName: ctx.osName, osVersion: ctx.osVersion };
 
-  return db.transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     await writeAuditLog({ actorType: 'customer', actorId: customer.id, action: 'customer.login', summary: 'Login via email' }, tx);
     return createSession(tx, customer.id, 'customer', device);
   });
@@ -183,18 +161,11 @@ export async function googleAuth(idToken: string, device?: DeviceInfo): Promise<
   const { sub, email, name, picture } = payload;
 
   const ctx = getContext();
-  const resolvedDevice: DeviceInfo = device ?? {
-    deviceId: ctx.deviceId,
-    deviceModel: ctx.deviceModel,
-    deviceName: ctx.deviceName,
-    osName: ctx.osName,
-    osVersion: ctx.osVersion,
-  };
+  const resolvedDevice: DeviceInfo = device ?? { deviceId: ctx.deviceId, deviceModel: ctx.deviceModel, deviceName: ctx.deviceName, osName: ctx.osName, osVersion: ctx.osVersion };
 
-  return db.transaction(async (tx) => {
-    // Look up existing identity for this Google sub
-    let identity = await tx.query.customerAuthIdentities.findFirst({
-      where: and(eq(customerAuthIdentities.providerKey, 'google'), eq(customerAuthIdentities.providerUserId, sub)),
+  return prisma.$transaction(async (tx) => {
+    let identity = await tx.customerAuthIdentity.findFirst({
+      where: { providerKey: 'google', providerUserId: sub },
     });
 
     let customerId: string;
@@ -202,57 +173,27 @@ export async function googleAuth(idToken: string, device?: DeviceInfo): Promise<
 
     if (identity) {
       customerId = identity.customerId;
-      await tx.update(customerAuthIdentities).set({ lastUsedAt: new Date() }).where(eq(customerAuthIdentities.id, identity.id));
+      await tx.customerAuthIdentity.update({ where: { id: identity.id }, data: { lastUsedAt: new Date() } });
     } else {
       isNew = true;
-      // Upsert customer by email if one already exists (e.g. email+password account)
-      let customer = email
-        ? await tx.query.customers.findFirst({ where: eq(customers.email, email) })
-        : undefined;
+      let customer = email ? await tx.customer.findFirst({ where: { email } }) : null;
 
       if (!customer) {
-        const [inserted] = await tx.insert(customers).values({
-          email: email ?? null,
-          emailVerified: true,
-          name: name ?? null,
-          profileImageUrl: picture ?? null,
-          referralCode: uuidv4().slice(0, 8).toUpperCase(),
-        }).returning();
-        customer = inserted!;
-        await tx.insert(wallets).values({ customerId: customer.id });
-      } else {
-        // Link Google to existing account
-        if (!customer.emailVerified) {
-          await tx.update(customers).set({ emailVerified: true }).where(eq(customers.id, customer.id));
-        }
+        customer = await tx.customer.create({
+          data: { email: email ?? null, emailVerified: true, name: name ?? null, profileImageUrl: picture ?? null, referralCode: uuidv4().slice(0, 8).toUpperCase() },
+        });
+        await tx.wallet.create({ data: { customerId: customer.id } });
+      } else if (!customer.emailVerified) {
+        await tx.customer.update({ where: { id: customer.id }, data: { emailVerified: true } });
       }
 
-      await tx.insert(customerAuthIdentities).values({
-        customerId: customer.id,
-        providerKey: 'google',
-        providerUserId: sub,
-        lastUsedAt: new Date(),
-      });
+      await tx.customerAuthIdentity.create({ data: { customerId: customer.id, providerKey: 'google', providerUserId: sub, lastUsedAt: new Date() } });
       customerId = customer.id;
 
-      broadcastAdminEvent('event:newSignup', {
-        persona: 'customer',
-        id: customer.id,
-        name: customer.name ?? name ?? 'New User',
-        method: 'google',
-        registeredAt: new Date().toISOString(),
-      });
+      broadcastAdminEvent('event:newSignup', { persona: 'customer', id: customer.id, name: customer.name ?? name ?? 'New User', method: 'google', registeredAt: new Date().toISOString() });
     }
 
-    await writeAuditLog({
-      actorType: 'customer',
-      actorId: customerId,
-      action: isNew ? 'customer.signup' : 'customer.login',
-      targetType: 'customer',
-      targetId: customerId,
-      summary: isNew ? 'Signed up via Google' : 'Login via Google',
-    }, tx);
-
+    await writeAuditLog({ actorType: 'customer', actorId: customerId, action: isNew ? 'customer.signup' : 'customer.login', targetType: 'customer', targetId: customerId, summary: isNew ? 'Signed up via Google' : 'Login via Google' }, tx);
     return createSession(tx, customerId, 'customer', resolvedDevice);
   });
 }
@@ -261,24 +202,16 @@ export async function appleAuth(identityToken: string, _nonce: string, name?: st
   const payload = await verifyAppleToken(identityToken, env.APPLE_SERVICE_ID);
   const { sub, email } = payload;
 
-  // Upsert central credential store — preserves email/name from first sign-in
-  // since Apple stops returning them on subsequent sign-ins
   const storedCreds = await upsertAppleCredential(sub, email, name);
   const resolvedEmail = email ?? storedCreds.email ?? undefined;
   const resolvedName = name ?? storedCreds.name ?? undefined;
 
   const ctx = getContext();
-  const resolvedDevice: DeviceInfo = device ?? {
-    deviceId: ctx.deviceId,
-    deviceModel: ctx.deviceModel,
-    deviceName: ctx.deviceName,
-    osName: ctx.osName,
-    osVersion: ctx.osVersion,
-  };
+  const resolvedDevice: DeviceInfo = device ?? { deviceId: ctx.deviceId, deviceModel: ctx.deviceModel, deviceName: ctx.deviceName, osName: ctx.osName, osVersion: ctx.osVersion };
 
-  return db.transaction(async (tx) => {
-    let identity = await tx.query.customerAuthIdentities.findFirst({
-      where: and(eq(customerAuthIdentities.providerKey, 'apple'), eq(customerAuthIdentities.providerUserId, sub)),
+  return prisma.$transaction(async (tx) => {
+    let identity = await tx.customerAuthIdentity.findFirst({
+      where: { providerKey: 'apple', providerUserId: sub },
     });
 
     let customerId: string;
@@ -286,55 +219,27 @@ export async function appleAuth(identityToken: string, _nonce: string, name?: st
 
     if (identity) {
       customerId = identity.customerId;
-      await tx.update(customerAuthIdentities).set({ lastUsedAt: new Date() }).where(eq(customerAuthIdentities.id, identity.id));
+      await tx.customerAuthIdentity.update({ where: { id: identity.id }, data: { lastUsedAt: new Date() } });
     } else {
       isNew = true;
-      let customer = resolvedEmail
-        ? await tx.query.customers.findFirst({ where: eq(customers.email, resolvedEmail) })
-        : undefined;
+      let customer = resolvedEmail ? await tx.customer.findFirst({ where: { email: resolvedEmail } }) : null;
 
       if (!customer) {
-        const [inserted] = await tx.insert(customers).values({
-          email: resolvedEmail ?? null,
-          emailVerified: resolvedEmail ? true : false,
-          name: resolvedName ?? null,
-          appleId: sub,
-          referralCode: uuidv4().slice(0, 8).toUpperCase(),
-        }).returning();
-        customer = inserted!;
-        await tx.insert(wallets).values({ customerId: customer.id });
+        customer = await tx.customer.create({
+          data: { email: resolvedEmail ?? null, emailVerified: resolvedEmail ? true : false, name: resolvedName ?? null, appleId: sub, referralCode: uuidv4().slice(0, 8).toUpperCase() },
+        });
+        await tx.wallet.create({ data: { customerId: customer.id } });
       } else {
-        await tx.update(customers)
-          .set({ appleId: sub, emailVerified: true })
-          .where(eq(customers.id, customer.id));
+        await tx.customer.update({ where: { id: customer.id }, data: { appleId: sub, emailVerified: true } });
       }
 
-      await tx.insert(customerAuthIdentities).values({
-        customerId: customer.id,
-        providerKey: 'apple',
-        providerUserId: sub,
-        lastUsedAt: new Date(),
-      });
+      await tx.customerAuthIdentity.create({ data: { customerId: customer.id, providerKey: 'apple', providerUserId: sub, lastUsedAt: new Date() } });
       customerId = customer.id;
 
-      broadcastAdminEvent('event:newSignup', {
-        persona: 'customer',
-        id: customer.id,
-        name: customer.name ?? resolvedName ?? 'New User',
-        method: 'apple',
-        registeredAt: new Date().toISOString(),
-      });
+      broadcastAdminEvent('event:newSignup', { persona: 'customer', id: customer.id, name: customer.name ?? resolvedName ?? 'New User', method: 'apple', registeredAt: new Date().toISOString() });
     }
 
-    await writeAuditLog({
-      actorType: 'customer',
-      actorId: customerId,
-      action: isNew ? 'customer.signup' : 'customer.login',
-      targetType: 'customer',
-      targetId: customerId,
-      summary: isNew ? 'Signed up via Apple Sign-In' : 'Login via Apple Sign-In',
-    }, tx);
-
+    await writeAuditLog({ actorType: 'customer', actorId: customerId, action: isNew ? 'customer.signup' : 'customer.login', targetType: 'customer', targetId: customerId, summary: isNew ? 'Signed up via Apple Sign-In' : 'Login via Apple Sign-In' }, tx);
     return createSession(tx, customerId, 'customer', resolvedDevice);
   });
 }
@@ -349,68 +254,95 @@ export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
     throw new AppError('AUTH_REQUIRED', 'Invalid refresh token.', 401);
   }
 
-  void bcrypt.hash(refreshToken, 1); // just check existence — suppress unused var warning
-  const session = await db.query.authSessions.findFirst({
-    where: and(eq(authSessions.subjectId, payload.sub), eq(authSessions.audience, 'customer')),
+  const session = await prisma.authSession.findFirst({
+    where: { sessionId: payload.sessionId, subjectId: payload.sub, audience: 'customer' },
   });
 
   if (!session || session.revokedAt) {
-    // Possible theft — revoke all sessions
-    await db.update(authSessions)
-      .set({ revokedAt: new Date(), revokedReason: 'theftDetected' })
-      .where(and(eq(authSessions.subjectId, payload.sub), eq(authSessions.audience, 'customer')));
+    await prisma.authSession.updateMany({
+      where: { subjectId: payload.sub, audience: 'customer', revokedAt: null },
+      data: { revokedAt: new Date(), revokedReason: 'theftDetected' },
+    });
     throw new AppError('AUTH_REQUIRED', 'Session invalidated. Please log in again.', 401);
   }
 
   const ctx = getContext();
-  const device: DeviceInfo = {
-    deviceId: ctx.deviceId,
-    deviceModel: ctx.deviceModel,
-    deviceName: ctx.deviceName,
-    osName: ctx.osName,
-    osVersion: ctx.osVersion,
-  };
+  const device: DeviceInfo = { deviceId: ctx.deviceId, deviceModel: ctx.deviceModel, deviceName: ctx.deviceName, osName: ctx.osName, osVersion: ctx.osVersion };
 
-  return db.transaction(async (tx) => {
-    await tx.update(authSessions).set({ revokedAt: new Date(), revokedReason: 'rotated' }).where(eq(authSessions.id, session.id));
+  return prisma.$transaction(async (tx) => {
+    await tx.authSession.update({ where: { id: session.id }, data: { revokedAt: new Date(), revokedReason: 'rotated' } });
     return createSession(tx, payload.sub, 'customer', device);
   });
 }
 
+export async function resendEmailOtp(email: string): Promise<void> {
+  const otp = await storeOtp(PERSONA, 'email', email, OTP_EMAIL_TTL);
+  logger.info({ email: maskEmail(email) }, 'Customer email OTP resent');
+  if (process.env['NODE_ENV'] !== 'production') logger.debug({ otp }, 'DEV OTP');
+}
+
+export async function forgotPassword(email: string): Promise<void> {
+  const identity = await prisma.customerAuthIdentity.findFirst({
+    where: { providerKey: 'emailPassword', providerUserId: email },
+  });
+  // Always succeed silently — never reveal whether email exists
+  if (!identity) return;
+
+  const otp = await storeOtp(PERSONA, 'email', `reset:${email}`, OTP_EMAIL_TTL);
+  logger.info({ email: maskEmail(email) }, 'Customer password reset OTP sent');
+  if (process.env['NODE_ENV'] !== 'production') logger.debug({ otp }, 'DEV password reset OTP');
+}
+
+export async function resetPassword(email: string, otp: string, newPassword: string): Promise<void> {
+  await verifyAndConsumeOtp(PERSONA, 'email', `reset:${email}`, otp);
+  assertPasswordStrength(newPassword);
+
+  const identity = await prisma.customerAuthIdentity.findFirst({
+    where: { providerKey: 'emailPassword', providerUserId: email },
+  });
+  if (!identity) throw new AppError('NOT_FOUND', 'Account not found.', 404);
+
+  const passwordHash = await hashPassword(newPassword);
+  await prisma.$transaction(async (tx) => {
+    await tx.customerAuthIdentity.update({ where: { id: identity.id }, data: { passwordHash } });
+    // Revoke all existing sessions so stolen-token can't be replayed
+    await tx.authSession.updateMany({
+      where: { subjectId: identity.customerId, audience: 'customer', revokedAt: null },
+      data: { revokedAt: new Date(), revokedReason: 'logout' },
+    });
+    await writeAuditLog({ actorType: 'customer', actorId: identity.customerId, action: 'customer.passwordReset', summary: 'Password reset via email OTP' }, tx);
+  });
+}
+
 export async function logout(sessionId: string, subjectId: string): Promise<void> {
-  await db.update(authSessions)
-    .set({ revokedAt: new Date(), revokedReason: 'logout' })
-    .where(and(eq(authSessions.id, sessionId), eq(authSessions.subjectId, subjectId)));
+  await prisma.authSession.updateMany({
+    where: { id: sessionId, subjectId },
+    data: { revokedAt: new Date(), revokedReason: 'logout' },
+  });
 }
 
 // ─── Private helpers ─────────────────────────────────────────────────────────
 
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type Tx = Prisma.TransactionClient;
 
-async function createSession(
-  tx: Tx,
-  subjectId: string,
-  persona: 'customer',
-  device?: DeviceInfo,
-): Promise<TokenPair> {
+async function createSession(tx: Tx, subjectId: string, persona: 'customer', device?: DeviceInfo): Promise<TokenPair> {
   const pair = await issueTokenPair(subjectId, JWT_AUDIENCE.CUSTOMER);
+  const refreshHash = pair.refreshToken ? await bcrypt.hash(pair.refreshToken, 6) : '';
 
-  const refreshHash = pair.refreshToken
-    ? await bcrypt.hash(pair.refreshToken, 6) // cost=6 just for storage; jti is the real check
-    : '';
-
-  await (tx as typeof db).insert(authSessions).values({
-    audience: persona,
-    subjectId,
-    refreshTokenHash: refreshHash,
-    sessionId: pair.sessionId,
-    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-    deviceId: device?.deviceId ?? null,
-    deviceModel: device?.deviceModel ?? null,
-    deviceName: device?.deviceName ?? null,
-    osName: device?.osName ?? null,
-    osVersion: device?.osVersion ?? null,
-  } as typeof authSessions.$inferInsert);
+  await tx.authSession.create({
+    data: {
+      audience: persona,
+      subjectId,
+      refreshTokenHash: refreshHash,
+      sessionId: pair.sessionId,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      deviceId: device?.deviceId ?? null,
+      deviceModel: device?.deviceModel ?? null,
+      deviceName: device?.deviceName ?? null,
+      osName: device?.osName ?? null,
+      osVersion: device?.osVersion ?? null,
+    },
+  });
 
   return pair;
 }

@@ -14,8 +14,7 @@ import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { JWT_AUDIENCE } from '../../config/constants.js';
 import { requirePermission, AdminPermission } from '../shared/rbac.js';
-import { db } from '../../db/index.js';
-import { appSettings } from '../../db/schema/adminExtras.js';
+import { prisma } from '../../db/client.js';
 import { getAllImageAspectRatios } from '../../modules/settings/imageSettings.js';
 import { DEFAULT_ASPECT_RATIOS } from '../../lib/imageProcessor.js';
 import { imageReoptimizeQueue } from '../../jobs/queues.js';
@@ -29,7 +28,6 @@ const UpdateAspectRatioSchema = z.object({
   width: z.number().int().min(1).max(100),
   height: z.number().int().min(1).max(100),
   reason: z.string().min(3),
-  /** If true, enqueues a background job to re-generate all existing variants. */
   reoptimize: z.boolean().optional().default(false),
 });
 
@@ -79,24 +77,22 @@ export const adminImageAspectRatioRoutes: FastifyPluginAsync = async (app) => {
       const adminId = (req as any).user?.sub as string;
       const key = `image.aspectRatio.${category}`;
 
-      await db
-        .insert(appSettings)
-        .values({
+      await prisma.appSetting.upsert({
+        where: { key },
+        create: {
           key,
           value: { width: body.width, height: body.height },
           description: `Aspect ratio for ${category} images`,
           category: 'image',
           updatedBy: adminId,
           updatedAt: new Date(),
-        })
-        .onConflictDoUpdate({
-          target: appSettings.key,
-          set: {
-            value: { width: body.width, height: body.height },
-            updatedBy: adminId,
-            updatedAt: new Date(),
-          },
-        });
+        },
+        update: {
+          value: { width: body.width, height: body.height },
+          updatedBy: adminId,
+          updatedAt: new Date(),
+        },
+      });
 
       let jobId: string | null = null;
       if (body.reoptimize) {

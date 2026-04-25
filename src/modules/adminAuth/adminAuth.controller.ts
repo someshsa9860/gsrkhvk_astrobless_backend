@@ -4,14 +4,10 @@ import type {
   AdminSendEmailOtpSchema,
   AdminVerifyEmailOtpSchema,
   AdminGoogleLoginSchema,
-  AdminTotpSchema,
-  AdminEnrollTotpSchema,
-  AdminConfirmTotpEnrollSchema,
   AdminRefreshSchema,
   AdminLogoutSchema,
   AdminSendPhoneOtpSchema,
   AdminVerifyPhoneOtpSchema,
-  AdminSkipTotpSchema,
 } from './adminAuth.schema.js';
 import type { z } from 'zod';
 
@@ -19,7 +15,6 @@ export async function sendEmailOtp(
   req: FastifyRequest<{ Body: z.infer<typeof AdminSendEmailOtpSchema> }>,
   reply: FastifyReply,
 ) {
-  // Always responds ok=true — prevents account enumeration.
   await service.sendEmailOtp(req.body.email);
   return reply.send({ ok: true, traceId: req.requestContext.traceId });
 }
@@ -38,30 +33,6 @@ export async function loginWithGoogle(
 ) {
   const result = await service.loginWithGoogle(req.body.idToken);
   return reply.send({ ok: true, data: result, traceId: req.requestContext.traceId });
-}
-
-export async function verifyTotp(
-  req: FastifyRequest<{ Body: z.infer<typeof AdminTotpSchema> }>,
-  reply: FastifyReply,
-) {
-  const tokens = await service.adminVerifyTotp(req.body.tempToken, req.body.code);
-  return reply.send({ ok: true, data: tokens, traceId: req.requestContext.traceId });
-}
-
-export async function beginEnrollment(
-  req: FastifyRequest<{ Body: z.infer<typeof AdminEnrollTotpSchema> }>,
-  reply: FastifyReply,
-) {
-  const result = await service.beginTotpEnrollment(req.body.tempToken);
-  return reply.send({ ok: true, data: result, traceId: req.requestContext.traceId });
-}
-
-export async function confirmEnrollment(
-  req: FastifyRequest<{ Body: z.infer<typeof AdminConfirmTotpEnrollSchema> }>,
-  reply: FastifyReply,
-) {
-  const tokens = await service.confirmTotpEnrollment(req.body.tempToken, req.body.code);
-  return reply.send({ ok: true, data: tokens, traceId: req.requestContext.traceId });
 }
 
 export async function refresh(
@@ -86,14 +57,6 @@ export async function verifyPhoneOtp(
 ) {
   const result = await service.verifyPhoneOtp(req.body.phone, req.body.otp);
   return reply.send({ ok: true, data: result, traceId: req.requestContext.traceId });
-}
-
-export async function skipTotp(
-  req: FastifyRequest<{ Body: z.infer<typeof AdminSkipTotpSchema> }>,
-  reply: FastifyReply,
-) {
-  const tokens = await service.skipTotp(req.body.tempToken);
-  return reply.send({ ok: true, data: tokens, traceId: req.requestContext.traceId });
 }
 
 export async function logout(

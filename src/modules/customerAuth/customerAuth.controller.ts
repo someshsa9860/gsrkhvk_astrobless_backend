@@ -38,7 +38,7 @@ export async function verifyEmailOtp(req: FastifyRequest<{ Body: z.infer<typeof 
 }
 
 export async function resendEmailOtp(req: FastifyRequest<{ Body: z.infer<typeof ResendEmailOtpSchema> }>, reply: FastifyReply) {
-  await service.sendPhoneOtp(req.body.email); // reuse OTP generator for email
+  await service.resendEmailOtp(req.body.email);
   return reply.send({ ok: true, data: { message: 'OTP resent.' }, traceId: req.requestContext.traceId });
 }
 
@@ -60,6 +60,16 @@ export async function appleAuth(req: FastifyRequest<{ Body: z.infer<typeof Apple
 export async function refreshToken(req: FastifyRequest<{ Body: z.infer<typeof RefreshTokenSchema> }>, reply: FastifyReply) {
   const tokens = await service.refreshTokens(req.body.refreshToken);
   return reply.send({ ok: true, data: { ...tokens, expiresIn: 900 }, traceId: req.requestContext.traceId });
+}
+
+export async function forgotPassword(req: FastifyRequest<{ Body: z.infer<typeof ForgotPasswordSchema> }>, reply: FastifyReply) {
+  await service.forgotPassword(req.body.email);
+  return reply.send({ ok: true, data: { message: 'If that email is registered, a reset code has been sent.' }, traceId: req.requestContext.traceId });
+}
+
+export async function resetPassword(req: FastifyRequest<{ Body: z.infer<typeof ResetPasswordSchema> }>, reply: FastifyReply) {
+  await service.resetPassword(req.body.email, req.body.otp, req.body.newPassword);
+  return reply.send({ ok: true, data: { message: 'Password reset successfully.' }, traceId: req.requestContext.traceId });
 }
 
 export async function logout(req: FastifyRequest, reply: FastifyReply) {

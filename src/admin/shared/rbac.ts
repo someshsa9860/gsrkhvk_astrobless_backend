@@ -2,10 +2,7 @@
 // requirePermission is always used ALONGSIDE requireAudience — it never replaces it.
 
 import type { preHandlerHookHandler } from 'fastify';
-import { db } from '../../db/client.js';
-import { admins } from '../../db/schema/admins.js';
-import { adminCustomRoles } from '../../db/schema/adminExtras.js';
-import { eq } from 'drizzle-orm';
+import { prisma } from '../../db/client.js';
 import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../observability/auditLogger.js';
 
@@ -32,6 +29,9 @@ export enum AdminPermission {
   ARTICLE_MANAGE = 'article.manage',
   BANNER_MANAGE = 'banner.manage',
   PUSH_CAMPAIGN_MANAGE = 'pushCampaign.manage',
+  PUJA_MANAGE = 'puja.manage',
+  PUJA_BOOKING_VIEW = 'pujaBooking.view',
+  PUJA_BOOKING_MANAGE = 'pujaBooking.manage',
   PRODUCT_MANAGE = 'product.manage',
   ORDER_VIEW = 'order.view',
   ORDER_MANAGE = 'order.manage',
@@ -40,6 +40,8 @@ export enum AdminPermission {
   FEEDBACK_VIEW = 'feedback.view',
   SETTINGS_VIEW = 'settings.view',
   SETTINGS_EDIT = 'settings.edit',
+  LANGUAGE_MANAGE = 'language.manage',
+  SKILL_MANAGE = 'skill.manage',
   LOG_VIEW = 'log.view',
   AUDIT_VIEW = 'audit.view',
   ERROR_VIEW = 'error.view',
@@ -55,7 +57,6 @@ export const ADMIN_ROLES: AdminRole[] = ['superAdmin', 'ops', 'finance', 'suppor
 
 const ALL_PERMISSIONS = Object.values(AdminPermission);
 
-// Map each role to its granted permissions.
 export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
   superAdmin: [...ALL_PERMISSIONS],
   ops: [
@@ -67,6 +68,7 @@ export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
     AdminPermission.PAYMENT_VIEW, AdminPermission.PAYOUT_VIEW, AdminPermission.PAYOUT_APPROVE,
     AdminPermission.SUPPORT_TICKET_VIEW, AdminPermission.SUPPORT_TICKET_RESPOND,
     AdminPermission.SETTINGS_VIEW, AdminPermission.SETTINGS_EDIT,
+    AdminPermission.LANGUAGE_MANAGE, AdminPermission.SKILL_MANAGE,
     AdminPermission.LOG_VIEW, AdminPermission.AUDIT_VIEW,
     AdminPermission.ERROR_VIEW, AdminPermission.ERROR_RESOLVE,
     AdminPermission.EXPORT_REQUEST,
@@ -92,8 +94,10 @@ export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
     AdminPermission.DASHBOARD_VIEW,
     AdminPermission.HOROSCOPE_MANAGE, AdminPermission.ARTICLE_MANAGE,
     AdminPermission.BANNER_MANAGE, AdminPermission.PUSH_CAMPAIGN_MANAGE,
+    AdminPermission.PUJA_MANAGE, AdminPermission.PUJA_BOOKING_VIEW, AdminPermission.PUJA_BOOKING_MANAGE,
     AdminPermission.PRODUCT_MANAGE, AdminPermission.ORDER_MANAGE,
     AdminPermission.ASTROLOGER_VIEW, AdminPermission.SETTINGS_VIEW,
+    AdminPermission.LANGUAGE_MANAGE, AdminPermission.SKILL_MANAGE,
     AdminPermission.EXPORT_REQUEST,
   ],
   analyst: [
@@ -109,18 +113,15 @@ export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
 // ── Internal helper: load admin + resolve effective permissions ───────────────
 
 async function resolveAdminPermissions(adminId: string): Promise<{ role: AdminRole; effectivePerms: Set<string> }> {
-  const admin = await db.query.admins.findFirst({ where: eq(admins.id, adminId) });
+  const admin = await prisma.admin.findFirst({ where: { id: adminId } });
   if (!admin || !admin.isActive) {
     throw new AppError('FORBIDDEN', 'Admin account not found or inactive.', 403);
   }
   const role = admin.role as AdminRole;
   let base: string[] = ROLE_PERMISSIONS[role] ?? [];
-  // For non-built-in role slugs, look up the custom role's permissions from DB.
   if (!ADMIN_ROLES.includes(role)) {
-    const customRole = await db.query.adminCustomRoles.findFirst({
-      where: eq(adminCustomRoles.slug, role),
-    });
-    base = customRole?.permissions ?? [];
+    const customRole = await prisma.adminCustomRole.findFirst({ where: { slug: role } });
+    base = (customRole?.permissions ?? []) as string[];
   }
   const custom = (admin.customPermissions ?? []) as string[];
   const effectivePerms = new Set<string>([...base, ...custom]);
@@ -138,7 +139,6 @@ export function requirePermission(...perms: AdminPermission[]): preHandlerHookHa
     const missing = perms.filter((p) => !effectivePerms.has(p));
 
     if (missing.length > 0) {
-      // Audit every denial so we have a trail of probing attempts.
       await writeAuditLog({
         actorType: 'admin',
         actorId: adminId,

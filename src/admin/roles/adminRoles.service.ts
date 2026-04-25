@@ -1,9 +1,6 @@
 // Business logic for admin custom-roles management.
 
-import { eq, ilike, and, desc, sql } from 'drizzle-orm';
-import { db } from '../../db/client.js';
-import { adminCustomRoles } from '../../db/schema/adminExtras.js';
-import { admins } from '../../db/schema/admins.js';
+import { prisma } from '../../db/client.js';
 import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../observability/auditLogger.js';
 import { ADMIN_ROLES } from '../shared/rbac.js';
@@ -14,22 +11,22 @@ import type { RoleListQuery, CreateRoleInput, UpdateRoleInput } from './adminRol
 
 export async function listRoles(q: RoleListQuery) {
   const { offset, limit } = paginationFrom(q);
-  const conditions = [];
-  if (q.search) conditions.push(ilike(adminCustomRoles.name, `%${q.search}%`));
-  const where = conditions.length ? and(...conditions) : undefined;
 
-  const [items, countResult] = await Promise.all([
-    db.query.adminCustomRoles.findMany({ where, limit, offset, orderBy: [desc(adminCustomRoles.createdAt)] }),
-    db.select({ count: sql<number>`count(*)` }).from(adminCustomRoles).where(where),
+  const where: Record<string, unknown> = {};
+  if (q.search) where['name'] = { contains: q.search, mode: 'insensitive' };
+
+  const [items, total] = await prisma.$transaction([
+    prisma.adminCustomRole.findMany({ where, skip: offset, take: limit, orderBy: { createdAt: 'desc' } }),
+    prisma.adminCustomRole.count({ where }),
   ]);
 
-  return toPagedResult(items, Number(countResult[0]?.count ?? 0), q);
+  return toPagedResult(items, total, q);
 }
 
 // ── Detail ────────────────────────────────────────────────────────────────────
 
 export async function getRole(id: string) {
-  const role = await db.query.adminCustomRoles.findFirst({ where: eq(adminCustomRoles.id, id) });
+  const role = await prisma.adminCustomRole.findFirst({ where: { id } });
   if (!role) throw new AppError('NOT_FOUND', 'Custom role not found.', 404);
   return role;
 }
@@ -37,26 +34,22 @@ export async function getRole(id: string) {
 // ── Create ────────────────────────────────────────────────────────────────────
 
 export async function createRole(adminId: string, input: CreateRoleInput) {
-  // Prevent shadowing built-in roles.
   if (ADMIN_ROLES.includes(input.slug as never)) {
     throw new AppError('VALIDATION', `"${input.slug}" is a reserved built-in role slug.`, 400);
   }
-  const existing = await db.query.adminCustomRoles.findFirst({
-    where: eq(adminCustomRoles.slug, input.slug),
-  });
+  const existing = await prisma.adminCustomRole.findFirst({ where: { slug: input.slug } });
   if (existing) throw new AppError('VALIDATION', `A role with slug "${input.slug}" already exists.`, 400);
 
-  const [created] = await db
-    .insert(adminCustomRoles)
-    .values({
+  const created = await prisma.adminCustomRole.create({
+    data: {
       name: input.name,
       slug: input.slug,
       description: input.description ?? null,
       permissions: input.permissions,
       isSystem: false,
       createdBy: adminId,
-    })
-    .returning();
+    },
+  });
 
   await writeAuditLog({
     actorType: 'admin',
@@ -75,28 +68,23 @@ export async function createRole(adminId: string, input: CreateRoleInput) {
 // ── Update ────────────────────────────────────────────────────────────────────
 
 export async function updateRole(adminId: string, id: string, input: UpdateRoleInput) {
-  const before = await db.query.adminCustomRoles.findFirst({ where: eq(adminCustomRoles.id, id) });
+  const before = await prisma.adminCustomRole.findFirst({ where: { id } });
   if (!before) throw new AppError('NOT_FOUND', 'Custom role not found.', 404);
   if (before.isSystem) throw new AppError('FORBIDDEN', 'System roles cannot be modified.', 403);
 
-  const updates: Partial<typeof before> = { updatedAt: new Date() };
-  if (input.name !== undefined) updates.name = input.name;
-  if (input.description !== undefined) updates.description = input.description;
-  if (input.permissions !== undefined) updates.permissions = input.permissions;
+  const data: Record<string, unknown> = { updatedAt: new Date() };
+  if (input.name !== undefined) data['name'] = input.name;
+  if (input.description !== undefined) data['description'] = input.description;
+  if (input.permissions !== undefined) data['permissions'] = input.permissions;
 
-  const [updated] = await db
-    .update(adminCustomRoles)
-    .set(updates)
-    .where(eq(adminCustomRoles.id, id))
-    .returning();
+  const updated = await prisma.adminCustomRole.update({ where: { id }, data });
 
-  // When permissions change, sync all admins assigned to this role so their
-  // customPermissions reflect the new set (used by frontend RBAC).
+  // When permissions change, sync all admins assigned to this role.
   if (input.permissions !== undefined) {
-    await db
-      .update(admins)
-      .set({ customPermissions: input.permissions, updatedAt: new Date() })
-      .where(eq(admins.role, before.slug));
+    await prisma.admin.updateMany({
+      where: { role: before.slug },
+      data: { customPermissions: input.permissions, updatedAt: new Date() },
+    });
   }
 
   await writeAuditLog({
@@ -116,24 +104,20 @@ export async function updateRole(adminId: string, id: string, input: UpdateRoleI
 // ── Delete ────────────────────────────────────────────────────────────────────
 
 export async function deleteRole(adminId: string, id: string) {
-  const role = await db.query.adminCustomRoles.findFirst({ where: eq(adminCustomRoles.id, id) });
+  const role = await prisma.adminCustomRole.findFirst({ where: { id } });
   if (!role) throw new AppError('NOT_FOUND', 'Custom role not found.', 404);
   if (role.isSystem) throw new AppError('FORBIDDEN', 'System roles cannot be deleted.', 403);
 
-  // Prevent deletion if any admin is still assigned this role.
-  const assignedCount = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(admins)
-    .where(eq(admins.role, role.slug));
-  if (Number(assignedCount[0]?.count ?? 0) > 0) {
+  const assignedCount = await prisma.admin.count({ where: { role: role.slug } });
+  if (assignedCount > 0) {
     throw new AppError(
       'VALIDATION',
-      `Cannot delete role "${role.name}" — ${assignedCount[0]?.count} admin(s) are still assigned to it.`,
+      `Cannot delete role "${role.name}" — ${assignedCount} admin(s) are still assigned to it.`,
       400,
     );
   }
 
-  await db.delete(adminCustomRoles).where(eq(adminCustomRoles.id, id));
+  await prisma.adminCustomRole.delete({ where: { id } });
 
   await writeAuditLog({
     actorType: 'admin',

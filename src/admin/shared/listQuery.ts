@@ -49,3 +49,24 @@ export function toPagedResult<T>(items: T[], total: number, q: ListQuery): Paged
     totalPages: Math.ceil(total / limit),
   };
 }
+
+// ── BigInt → Number serialization ────────────────────────────────────────────
+// Prisma returns BigInt for columns declared as BigInt (money fields). Fastify's
+// fast-json-stringify can't serialize them. This helper recursively converts any
+// BigInt values in a plain object/array to Number. All money values are safe
+// (< 2^53) so no precision is lost.
+
+type Serializable = Record<string, unknown> | unknown[] | string | number | boolean | null | undefined;
+
+export function serializeBigInts<T>(value: T): T {
+  if (typeof value === 'bigint') return Number(value) as unknown as T;
+  if (Array.isArray(value)) return value.map(serializeBigInts) as unknown as T;
+  if (value !== null && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      result[k] = serializeBigInts(v as Serializable);
+    }
+    return result as T;
+  }
+  return value;
+}
