@@ -11,46 +11,43 @@ function generateTicketNumber(): string {
   return `T-${ymd}-${rand}`;
 }
 
-export async function createTicket(customerId: string, data: z.infer<typeof CreateSupportTicketSchema>) {
-  const ticket = await prisma.$transaction(async (tx) => {
-    const t = await tx.supportTicket.create({
+export async function createTicket(astrologerId: string, data: z.infer<typeof CreateSupportTicketSchema>) {
+  return prisma.$transaction(async (tx) => {
+    const ticket = await tx.supportTicket.create({
       data: {
         ticketNumber: generateTicketNumber(),
-        submitterType: 'customer',
-        submitterId: customerId,
+        submitterType: 'astrologer',
+        submitterId: astrologerId,
         category: data.category,
         priority: 'normal',
         subject: data.subject,
         description: data.description,
         attachmentKeys: data.attachmentKeys ?? [],
         linkedConsultationId: data.linkedConsultationId ?? null,
-        linkedOrderId: data.linkedOrderId ?? null,
-        linkedPaymentOrderId: data.linkedPaymentOrderId ?? null,
         status: 'open',
       },
     });
     await writeAuditLog({
-      actorType: 'customer',
-      actorId: customerId,
+      actorType: 'astrologer',
+      actorId: astrologerId,
       action: 'support.ticketCreated',
       targetType: 'supportTicket',
-      targetId: t.id,
-      summary: `Customer opened ticket: ${data.subject}`,
-      metadata: { category: data.category, ticketNumber: t.ticketNumber },
+      targetId: ticket.id,
+      summary: `Astrologer opened ticket: ${data.subject}`,
+      metadata: { category: data.category, ticketNumber: ticket.ticketNumber },
     });
-    return t;
+    return ticket;
   });
-  return ticket;
 }
 
-export async function listTickets(customerId: string, q: z.infer<typeof ListTicketsQuerySchema>) {
+export async function listTickets(astrologerId: string, q: z.infer<typeof ListTicketsQuerySchema>) {
   const limit = q.limit ?? 20;
   const page = q.page ?? 1;
   const skip = (page - 1) * limit;
 
   const where = {
-    submitterType: 'customer',
-    submitterId: customerId,
+    submitterType: 'astrologer',
+    submitterId: astrologerId,
     ...(q.status ? { status: q.status } : {}),
   };
 
@@ -68,9 +65,9 @@ export async function listTickets(customerId: string, q: z.infer<typeof ListTick
   return { items, page, limit, total, totalPages: Math.ceil(total / limit) };
 }
 
-export async function getTicket(customerId: string, ticketId: string) {
+export async function getTicket(astrologerId: string, ticketId: string) {
   const ticket = await prisma.supportTicket.findFirst({
-    where: { id: ticketId, submitterType: 'customer', submitterId: customerId },
+    where: { id: ticketId, submitterType: 'astrologer', submitterId: astrologerId },
     include: { messages: { where: { isInternalNote: false }, orderBy: { createdAt: 'asc' } } },
   });
   if (!ticket) throw new AppError('NOT_FOUND', 'Ticket not found.', 404);
@@ -78,12 +75,12 @@ export async function getTicket(customerId: string, ticketId: string) {
 }
 
 export async function addMessage(
-  customerId: string,
+  astrologerId: string,
   ticketId: string,
   data: z.infer<typeof AddTicketMessageSchema>,
 ) {
   const ticket = await prisma.supportTicket.findFirst({
-    where: { id: ticketId, submitterType: 'customer', submitterId: customerId },
+    where: { id: ticketId, submitterType: 'astrologer', submitterId: astrologerId },
   });
   if (!ticket) throw new AppError('NOT_FOUND', 'Ticket not found.', 404);
   if (ticket.status === 'closed') throw new AppError('VALIDATION', 'Cannot reply to a closed ticket.', 400);
@@ -92,13 +89,12 @@ export async function addMessage(
     const message = await tx.supportTicketMessage.create({
       data: {
         ticketId,
-        authorType: 'customer',
-        authorId: customerId,
+        authorType: 'astrologer',
+        authorId: astrologerId,
         body: data.body,
         attachmentKeys: data.attachmentKeys ?? [],
       },
     });
-    // Re-open ticket if it was waiting on user
     if (ticket.status === 'waitingOnUser') {
       await tx.supportTicket.update({ where: { id: ticketId }, data: { status: 'inProgress' } });
     }
@@ -106,9 +102,9 @@ export async function addMessage(
   });
 }
 
-export async function closeTicket(customerId: string, ticketId: string) {
+export async function closeTicket(astrologerId: string, ticketId: string) {
   const ticket = await prisma.supportTicket.findFirst({
-    where: { id: ticketId, submitterType: 'customer', submitterId: customerId },
+    where: { id: ticketId, submitterType: 'astrologer', submitterId: astrologerId },
   });
   if (!ticket) throw new AppError('NOT_FOUND', 'Ticket not found.', 404);
   if (ticket.status === 'closed') throw new AppError('VALIDATION', 'Ticket already closed.', 400);
@@ -116,12 +112,12 @@ export async function closeTicket(customerId: string, ticketId: string) {
   await prisma.$transaction(async (tx) => {
     await tx.supportTicket.update({ where: { id: ticketId }, data: { status: 'closed' } });
     await writeAuditLog({
-      actorType: 'customer',
-      actorId: customerId,
+      actorType: 'astrologer',
+      actorId: astrologerId,
       action: 'support.ticketClosed',
       targetType: 'supportTicket',
       targetId: ticketId,
-      summary: `Customer closed ticket ${ticket.ticketNumber}`,
+      summary: `Astrologer closed ticket ${ticket.ticketNumber}`,
       beforeState: { status: ticket.status },
       afterState: { status: 'closed' },
     });
