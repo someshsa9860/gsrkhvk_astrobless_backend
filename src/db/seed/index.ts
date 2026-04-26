@@ -10,7 +10,11 @@ if (!process.env['DATABASE_URL']) {
   process.exit(1);
 }
 
-const SEED_ADMIN_EMAIL = process.env['SEED_ADMIN_EMAIL'] ?? 'tech@callvcal.com';
+const SEED_ADMIN_EMAIL = process.env['SEED_ADMIN_EMAIL'];
+if (!SEED_ADMIN_EMAIL) {
+  console.error('SEED_ADMIN_EMAIL env var is required');
+  process.exit(1);
+}
 const ALL_PERMISSIONS = Object.values(AdminPermission);
 
 async function seedAdmin(): Promise<void> {
