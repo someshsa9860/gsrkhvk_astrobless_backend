@@ -13,6 +13,7 @@ import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
 import { redis, pubRedis, subRedis } from '../lib/redis.js';
 import { initChatGateway } from '../modules/chat/chat.gateway.js';
+import { initPresenceGateway } from '../modules/presence/presence.gateway.js';
 
 if (env.SENTRY_DSN) {
   Sentry.init({ dsn: env.SENTRY_DSN, environment: env.NODE_ENV, release: env.APP_VERSION });
@@ -38,6 +39,9 @@ async function main(): Promise<void> {
 
   const io = initChatGateway(httpServer);
   logger.info('Socket: chat gateway initialized (Redis adapter attached)');
+
+  initPresenceGateway(io);
+  logger.info('Socket: presence gateway initialized on /presence namespace');
 
   httpServer.listen(SOCKET_PORT, '0.0.0.0', () => {
     logger.info({ port: SOCKET_PORT }, 'Socket: server listening');

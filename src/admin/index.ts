@@ -22,6 +22,7 @@ import { adminSupportRoutes } from './support/adminSupport.routes.js';
 import { adminPujaRoutes } from './puja/adminPuja.routes.js';
 import { adminLanguagesRoutes } from './languages/adminLanguages.routes.js';
 import { adminSkillsRoutes } from './skills/adminSkills.routes.js';
+import { adminAstroMallRoutes } from './astromall/adminAstroMall.routes.js';
 
 const adminPluginImpl: FastifyPluginAsync = async (app) => {
   await app.register(adminDashboardRoutes);
@@ -43,6 +44,7 @@ const adminPluginImpl: FastifyPluginAsync = async (app) => {
   await app.register(adminPujaRoutes);
   await app.register(adminLanguagesRoutes);
   await app.register(adminSkillsRoutes);
+  await app.register(adminAstroMallRoutes);
 };
 
 // Wrapped with fastify-plugin so decorators and hooks added by sub-plugins are
