@@ -126,7 +126,7 @@ export async function walletCredit(adminId: string, customerId: string, input: W
     );
   });
 
-  const displayAmount = (input.amount / 100).toFixed(2);
+  const displayAmount = input.amount.toFixed(2);
   sendPush('customer', customerId, 'Wallet Updated', `₹${displayAmount} has been added to your wallet by support.`, { type: 'walletUpdated' }).catch(() => {});
 
   return { newBalance };

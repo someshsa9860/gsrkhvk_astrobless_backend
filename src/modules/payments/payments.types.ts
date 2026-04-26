@@ -65,7 +65,7 @@ export interface IapVerifyInput {
   customerId: string;
   /** Product ID configured in Google Play Console / App Store Connect */
   productId: string;
-  /** The wallet credit amount this product maps to (in 1/100 of ₹1) */
+  /** The wallet credit amount this product maps to, in ₹ (e.g. 50.00 = ₹50) */
   amount: number;
   idempotencyKey: string;
   /** Google Play: purchase token from BillingClient. Apple: transactionId from StoreKit 2 */
