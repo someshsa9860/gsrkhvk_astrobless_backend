@@ -34,6 +34,15 @@ export interface StorageProvider {
   presignedUpload(key: string, contentType: string, ttlSeconds?: number): Promise<string>;
 
   /**
+   * Generate a signed GET URL for time-limited private file access.
+   * When CloudFront is configured this returns a CF signed URL; otherwise
+   * falls back to an S3 presigned GET URL.
+   * @param key        The storage key to sign.
+   * @param ttlSeconds URL validity period in seconds (default: env.CLOUDFRONT_URL_TTL_SECONDS).
+   */
+  presignedDownload(key: string, ttlSeconds?: number): Promise<string>;
+
+  /**
    * Copy a key within the same bucket/store (used to move temp → permanent).
    * Destination is overwritten if it already exists.
    */

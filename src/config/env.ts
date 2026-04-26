@@ -82,6 +82,17 @@ const envSchema = z.object({
   AWS_ACCESS_KEY_ID: z.string().default(''),
   AWS_SECRET_ACCESS_KEY: z.string().default(''),
 
+  // CloudFront CDN (optional — when set, all public URLs and signed downloads go through CF)
+  // CLOUDFRONT_DOMAIN: your CF distribution domain, e.g. d1234abcd.cloudfront.net
+  // CLOUDFRONT_KEY_PAIR_ID: the CF public key ID from the AWS console
+  // CLOUDFRONT_PRIVATE_KEY: path to the .pem file (e.g. /run/secrets/cloudfront.pem)
+  //                         OR the raw PEM string (multiline, with header/footer)
+  // CLOUDFRONT_URL_TTL_SECONDS: how long signed URLs are valid (default 3600 = 1h)
+  CLOUDFRONT_DOMAIN: z.string().default(''),
+  CLOUDFRONT_KEY_PAIR_ID: z.string().default(''),
+  CLOUDFRONT_PRIVATE_KEY: z.string().default(''),
+  CLOUDFRONT_URL_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+
   // Cloudflare R2 (when STORAGE_PROVIDER=r2)
   R2_ACCOUNT_ID: z.string().default(''),
   R2_ACCESS_KEY_ID: z.string().default(''),

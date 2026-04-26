@@ -5,8 +5,11 @@ import {
   ListObjectsV2Command,
   CopyObjectCommand,
   HeadObjectCommand,
+  GetObjectCommand,
 } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { getSignedUrl as s3SignedUrl } from '@aws-sdk/s3-request-presigner';
+import { getSignedUrl as cfSignedUrl } from '@aws-sdk/cloudfront-signer';
+import { readFileSync } from 'fs';
 import { env } from '../../config/env.js';
 import type { StorageProvider, UploadResult } from './types.js';
 
@@ -31,6 +34,28 @@ function makeS3Client() {
   });
 }
 
+// Resolve the CloudFront private key from a file path or inline PEM string.
+function resolveCloudFrontPrivateKey(): string {
+  const raw = env.CLOUDFRONT_PRIVATE_KEY;
+  if (!raw) return '';
+  // File path
+  if (raw.startsWith('/') || raw.startsWith('./')) {
+    return readFileSync(raw, 'utf8');
+  }
+  // Inline PEM — replace literal \n with real newlines in case it was passed via env
+  return raw.replace(/\\n/g, '\n');
+}
+
+let _cfPrivateKey: string | null = null;
+function getCfPrivateKey(): string {
+  if (_cfPrivateKey === null) _cfPrivateKey = resolveCloudFrontPrivateKey();
+  return _cfPrivateKey;
+}
+
+function isCfEnabled(): boolean {
+  return !!(env.CLOUDFRONT_DOMAIN && env.CLOUDFRONT_KEY_PAIR_ID && env.CLOUDFRONT_PRIVATE_KEY);
+}
+
 export class S3StorageProvider implements StorageProvider {
   private readonly client: S3Client;
   private readonly bucket: string;
@@ -39,9 +64,14 @@ export class S3StorageProvider implements StorageProvider {
   constructor() {
     this.client = makeS3Client();
     this.bucket = env.STORAGE_PROVIDER === 'r2' ? env.R2_BUCKET : env.S3_BUCKET;
-    this.baseUrl = env.STORAGE_PROVIDER === 'r2'
-      ? env.R2_PUBLIC_URL || env.STORAGE_PUBLIC_URL
-      : env.STORAGE_PUBLIC_URL;
+    // When CloudFront is configured, public URLs go through the CF domain.
+    if (isCfEnabled()) {
+      this.baseUrl = `https://${env.CLOUDFRONT_DOMAIN}`;
+    } else {
+      this.baseUrl = env.STORAGE_PROVIDER === 'r2'
+        ? env.R2_PUBLIC_URL || env.STORAGE_PUBLIC_URL
+        : env.STORAGE_PUBLIC_URL;
+    }
   }
 
   async upload(key: string, buffer: Buffer, contentType: string): Promise<UploadResult> {
@@ -51,9 +81,6 @@ export class S3StorageProvider implements StorageProvider {
         Key: key,
         Body: buffer,
         ContentType: contentType,
-        // Files under public/ prefix are readable without signing.
-        // For S3: bucket must have a public-read bucket policy on the public/ prefix.
-        // For R2: set public access on the bucket.
         CacheControl: 'public, max-age=31536000, immutable',
       }),
     );
@@ -100,7 +127,23 @@ export class S3StorageProvider implements StorageProvider {
       Key: key,
       ContentType: contentType,
     });
-    return getSignedUrl(this.client, cmd, { expiresIn: ttlSeconds });
+    return s3SignedUrl(this.client, cmd, { expiresIn: ttlSeconds });
+  }
+
+  async presignedDownload(key: string, ttlSeconds = env.CLOUDFRONT_URL_TTL_SECONDS): Promise<string> {
+    if (isCfEnabled()) {
+      const url = `https://${env.CLOUDFRONT_DOMAIN}/${key}`;
+      const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+      return cfSignedUrl({
+        url,
+        keyPairId: env.CLOUDFRONT_KEY_PAIR_ID,
+        privateKey: getCfPrivateKey(),
+        dateLessThan: expiresAt.toISOString(),
+      });
+    }
+    // Fallback: S3 presigned GET
+    const cmd = new GetObjectCommand({ Bucket: this.bucket, Key: key });
+    return s3SignedUrl(this.client, cmd, { expiresIn: ttlSeconds });
   }
 
   async copy(sourceKey: string, destKey: string): Promise<void> {

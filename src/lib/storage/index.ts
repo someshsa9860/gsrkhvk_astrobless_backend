@@ -25,6 +25,19 @@ export function keyToUrl(key: string | null | undefined): string | null {
   return getStorage().publicUrl(key);
 }
 
+/**
+ * Generate a signed (time-limited) URL for a private file.
+ * Uses CloudFront signed URL when CF is configured, S3 presigned GET otherwise.
+ * Returns null if key is null/undefined.
+ */
+export async function signedUrl(
+  key: string | null | undefined,
+  ttlSeconds?: number,
+): Promise<string | null> {
+  if (!key) return null;
+  return getStorage().presignedDownload(key, ttlSeconds);
+}
+
 /** Resolve an array of storage keys to public URLs. */
 export function keysToUrls(keys: string[]): string[] {
   const storage = getStorage();

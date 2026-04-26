@@ -73,6 +73,11 @@ export class LocalStorageProvider implements StorageProvider {
     return `${this.baseUrl}/uploads-presign/${token}`;
   }
 
+  async presignedDownload(key: string, _ttlSeconds?: number): Promise<string> {
+    // Local dev: signed downloads are just public URLs (no auth needed locally)
+    return this.publicUrl(key);
+  }
+
   async copy(sourceKey: string, destKey: string): Promise<void> {
     const src = path.join(this.root, sourceKey);
     const dst = path.join(this.root, destKey);

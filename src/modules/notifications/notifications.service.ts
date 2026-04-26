@@ -1,15 +1,31 @@
 import admin from 'firebase-admin';
+import { readFileSync } from 'fs';
 import { env } from '../../config/env.js';
 import { prisma } from '../../db/client.js';
 import { logger } from '../../lib/logger.js';
 
 let firebaseInitialized = false;
 
+function resolveServiceAccount(): admin.ServiceAccount | null {
+  const raw = env.FCM_SERVICE_ACCOUNT_JSON;
+  if (!raw) return null;
+  try {
+    // File path: starts with / or ./
+    if (raw.startsWith('/') || raw.startsWith('./')) {
+      return JSON.parse(readFileSync(raw, 'utf8')) as admin.ServiceAccount;
+    }
+    return JSON.parse(raw) as admin.ServiceAccount;
+  } catch (err) {
+    logger.error({ err }, 'Failed to load Firebase service account');
+    return null;
+  }
+}
+
 function ensureFirebase(): void {
   if (firebaseInitialized) return;
-  if (!env.FCM_SERVICE_ACCOUNT_JSON) return;
+  const serviceAccount = resolveServiceAccount();
+  if (!serviceAccount) return;
   try {
-    const serviceAccount = JSON.parse(env.FCM_SERVICE_ACCOUNT_JSON) as admin.ServiceAccount;
     admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
     firebaseInitialized = true;
   } catch (err) {
