@@ -19,28 +19,41 @@ import { logger } from '../../lib/logger.js';
 import type { z } from 'zod';
 import type { CreateKundliProfileSchema } from './kundli.schema.js';
 
-// Upload an SVG string to managed storage and return the storage key.
-// Keys always start with "public/" so they are accessible without auth
-// (S3 bucket policy / CloudFront can enforce this at the CDN layer).
-async function uploadChartSvg(
-  profileId: string,
-  div: 'D1' | 'D9',
-  svgString: string,
-): Promise<string> {
-  const key = `public/kundli/charts/${profileId}/${div}.svg`;
-  const buffer = Buffer.from(svgString, 'utf-8');
-  await getStorage().upload(key, buffer, 'image/svg+xml');
-  return key;
+// ── Storage key helpers ───────────────────────────────────────────────────────
+// Standard URL structure: public/kundli/{customerId}/{profileId}/{tab}/{name}.svg
+// This makes keys human-readable and groupable by prefix in S3 / local storage.
+
+function chartSvgKey(customerId: string, profileId: string, div: string): string {
+  return `public/kundli/${customerId}/${profileId}/charts/${div}.svg`;
 }
 
-// Delete both chart SVGs from storage (fire-and-forget — never blocks the caller).
-async function deleteChartSvgs(profileId: string): Promise<void> {
-  const storage = getStorage();
-  await Promise.all([
-    storage.delete(`public/kundli/charts/${profileId}/D1.svg`),
-    storage.delete(`public/kundli/charts/${profileId}/D9.svg`),
-  ]).catch((err) => logger.warn({ err, profileId }, '[kundli] failed to delete old chart SVGs'))
+function ashtakvargaSvgKey(customerId: string, profileId: string, planet: string): string {
+  return `public/kundli/${customerId}/${profileId}/ashtakvarga/${planet}.svg`;
 }
+
+async function uploadSvg(key: string, svgString: string): Promise<string | null> {
+  try {
+    await getStorage().upload(key, Buffer.from(svgString, 'utf-8'), 'image/svg+xml');
+    return key;
+  } catch (err) {
+    logger.warn({ err, key }, '[kundli] SVG upload failed');
+    return null;
+  }
+}
+
+async function deleteProfileSvgs(customerId: string, profileId: string): Promise<void> {
+  // Delete all SVGs under this profile's storage prefix (fire-and-forget)
+  const prefix = `public/kundli/${customerId}/${profileId}/`;
+  try {
+    const keys = await getStorage().listKeys(prefix);
+    await Promise.all(keys.map((k) => getStorage().delete(k)));
+    logger.debug({ prefix, count: keys.length }, '[kundli] deleted profile SVGs');
+  } catch (err) {
+    logger.warn({ err, prefix }, '[kundli] failed to delete profile SVGs');
+  }
+}
+
+// ── Profile CRUD ──────────────────────────────────────────────────────────────
 
 export async function listProfiles(customerId: string) {
   return prisma.kundliProfile.findMany({
@@ -107,10 +120,11 @@ export async function updateProfile(
       ...(input.birthLat !== undefined && { birthLat: String(input.birthLat) }),
       ...(input.birthLng !== undefined && { birthLng: String(input.birthLng) }),
       ...(input.timezoneOffset !== undefined && { timezoneOffset: String(input.timezoneOffset) }),
-      // Clear cached chart so it will be re-generated on next report fetch.
-      // Delete old SVGs from storage (fire-and-forget).
+      // Clear all cached data — will be regenerated on next report fetch
       chartData: null,
       chartComputedAt: null,
+      chartSvgKeys: null,
+      ashtakvargaSvgKeys: null,
       chartD1Key: null,
       chartD9Key: null,
       updatedAt: new Date(),
@@ -128,9 +142,7 @@ export async function updateProfile(
     afterState: { label: updated.label, birthDate: updated.birthDate },
   });
 
-  // Delete old chart SVGs after the DB update succeeds (fire-and-forget)
-  void deleteChartSvgs(profileId);
-
+  void deleteProfileSvgs(customerId, profileId);
   return updated;
 }
 
@@ -152,9 +164,10 @@ export async function deleteProfile(customerId: string, profileId: string) {
     beforeState: { label: profile.label },
   });
 
-  // Delete chart SVGs from storage (fire-and-forget)
-  void deleteChartSvgs(profileId);
+  void deleteProfileSvgs(customerId, profileId);
 }
+
+// ── Report (main birth chart data) ───────────────────────────────────────────
 
 function filterPreBirthDasha(dasha: DashaPeriod[], birthDate: string): DashaPeriod[] {
   return dasha
@@ -165,7 +178,9 @@ function filterPreBirthDasha(dasha: DashaPeriod[], birthDate: string): DashaPeri
         .filter((a) => a.endDate > birthDate)
         .map((a) => ({
           ...a,
-          pratyantar: a.pratyantar.filter((pr) => pr.endDate > birthDate),
+          pratyantar: (a as typeof a & { pratyantar?: typeof a.antars }).pratyantar?.filter(
+            (pr) => pr.endDate > birthDate,
+          ) ?? [],
         })),
     }));
 }
@@ -182,34 +197,28 @@ export async function getReport(
 
   type ChartData = Awaited<ReturnType<typeof getBirthChartData>>;
   let chartData = profile.chartData as ChartData | null;
-  let d1Key = profile.chartD1Key as string | null;
-  let d9Key = profile.chartD9Key as string | null;
+  let svgKeys = (profile.chartSvgKeys ?? {}) as Record<string, string>;
 
   if (!chartData || !profile.chartComputedAt || forceRefresh) {
     const chartInput = buildChartInput(profile);
     chartData = await getBirthChartData(chartInput);
 
-    // Upload chart SVGs to managed storage (public/ prefix → CDN-accessible).
-    // The raw SVG strings from the API are stored once here; chartData itself
-    // does NOT persist them so the DB stays lean.
-    const [uploadedD1Key, uploadedD9Key] = await Promise.all([
+    // Upload D1 + D9 SVGs with standardised keys
+    const [d1Key, d9Key] = await Promise.all([
       chartData.chartImageD1
-        ? uploadChartSvg(profileId, 'D1', chartData.chartImageD1).catch((err) => {
-            logger.warn({ err }, '[kundli] D1 SVG upload failed, skipping');
-            return null;
-          })
+        ? uploadSvg(chartSvgKey(customerId, profileId, 'D1'), chartData.chartImageD1)
         : null,
       chartData.chartImageD9
-        ? uploadChartSvg(profileId, 'D9', chartData.chartImageD9).catch((err) => {
-            logger.warn({ err }, '[kundli] D9 SVG upload failed, skipping');
-            return null;
-          })
+        ? uploadSvg(chartSvgKey(customerId, profileId, 'D9'), chartData.chartImageD9)
         : null,
     ]);
-    d1Key = uploadedD1Key;
-    d9Key = uploadedD9Key;
 
-    // Strip raw SVG bytes before persisting chartData — store the key instead
+    svgKeys = {
+      ...(d1Key ? { D1: d1Key } : {}),
+      ...(d9Key ? { D9: d9Key } : {}),
+    };
+
+    // Strip raw SVG bytes before persisting — only store the keys
     const { chartImageD1: _d1, chartImageD9: _d9, ...chartDataWithoutSvg } = chartData;
 
     await prisma.kundliProfile.update({
@@ -217,8 +226,10 @@ export async function getReport(
       data: {
         chartData: chartDataWithoutSvg,
         chartComputedAt: new Date(),
-        chartD1Key: d1Key,
-        chartD9Key: d9Key,
+        chartSvgKeys: svgKeys,
+        // Keep legacy columns in sync for backward compat
+        chartD1Key: d1Key ?? null,
+        chartD9Key: d9Key ?? null,
         updatedAt: new Date(),
       },
     });
@@ -242,12 +253,20 @@ export async function getReport(
     ? dashaData
     : filterPreBirthDasha(dashaData, profile.birthDate);
 
-  // Resolve storage keys → public URLs at response time
+  // Resolve all stored SVG keys → public URLs
+  const resolvedSvgUrls: Record<string, string | null> = {};
+  for (const [div, key] of Object.entries(svgKeys)) {
+    resolvedSvgUrls[div] = keyToUrl(key);
+  }
+
   const responseData = {
     ...(chartData as Record<string, unknown>),
     dasha: filteredDasha,
-    chartImageD1: keyToUrl(d1Key),
-    chartImageD9: keyToUrl(d9Key),
+    // Inject resolved URLs for all cached charts
+    chartSvgUrls: resolvedSvgUrls,
+    // Legacy top-level fields for backward compat
+    chartImageD1: resolvedSvgUrls['D1'] ?? null,
+    chartImageD9: resolvedSvgUrls['D9'] ?? null,
   };
 
   return {
@@ -258,24 +277,7 @@ export async function getReport(
   };
 }
 
-function buildChartInput(profile: {
-  birthDate: string;
-  birthTime: string | null;
-  birthLat: string;
-  birthLng: string;
-  timezoneOffset: string;
-}): BirthChartInput {
-  const timePart = profile.birthTime ?? '12:00';
-  const [year, month, day] = profile.birthDate.split('-').map(Number);
-  const [hour, min] = timePart.split(':').map(Number);
-  return {
-    day, month, year,
-    hour, min,
-    lat: Number(profile.birthLat),
-    lon: Number(profile.birthLng),
-    tzone: Number(profile.timezoneOffset),
-  };
-}
+// ── Divisional chart — cached per div ────────────────────────────────────────
 
 export async function getDivisionalChartForProfile(
   customerId: string,
@@ -286,8 +288,48 @@ export async function getDivisionalChartForProfile(
     where: { id: profileId, customerId },
   });
   if (!profile) throw new AppError('NOT_FOUND', 'Kundli profile not found.', 404);
-  return getDivisionalChart(buildChartInput(profile), div);
+
+  const input = buildChartInput(profile);
+  const data = await getDivisionalChart(input, div);
+
+  // Fetch and cache the SVG for this div (get chart image from vedic API)
+  let svgUrl: string | null = null;
+  try {
+    const { data: svgRaw } = await (await import('axios')).default.get<string>(
+      'https://api.vedicastroapi.com/v3-json/horoscope/chart-image',
+      {
+        params: {
+          ...buildVedicParams(input),
+          div,
+          style: 'north',
+          format: 'svg',
+          size: 400,
+          api_key: process.env['VEDIC_ASTRO_API_KEY'],
+        },
+        responseType: 'text',
+      },
+    );
+    if (typeof svgRaw === 'string' && svgRaw.trim().startsWith('<')) {
+      const key = chartSvgKey(customerId, profileId, div);
+      const uploaded = await uploadSvg(key, svgRaw);
+      if (uploaded) {
+        svgUrl = keyToUrl(uploaded);
+        // Persist this key into chartSvgKeys
+        const current = ((profile.chartSvgKeys ?? {}) as Record<string, string>);
+        await prisma.kundliProfile.update({
+          where: { id: profileId },
+          data: { chartSvgKeys: { ...current, [div]: key } },
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn({ div, err }, '[kundli] divisional chart SVG fetch failed');
+  }
+
+  return { ...data, svgUrl };
 }
+
+// ── Ashtakvarga — cached per planet ──────────────────────────────────────────
 
 export async function getAshtakvargaForProfile(
   customerId: string,
@@ -302,23 +344,29 @@ export async function getAshtakvargaForProfile(
   const input = buildChartInput(profile);
   const data = await getAshtakvarga(input, planet);
 
-  // Upload Ashtakvarga chart image to managed storage (public/ prefix).
-  // Key: public/kundli/ashtakvarga/{profileId}/{planet}.svg
-  // Not cached in DB — regenerated on each call but stored in storage.
   let chartImageUrl: string | null = null;
   if (data.chartImage) {
-    const key = `public/kundli/ashtakvarga/${profileId}/${planet}.svg`;
-    const uploaded = await getStorage()
-      .upload(key, Buffer.from(data.chartImage, 'utf-8'), 'image/svg+xml')
-      .catch((err) => {
-        logger.warn({ err, planet }, '[kundli] ashtakvarga SVG upload failed');
-        return null;
-      });
-    chartImageUrl = uploaded ? keyToUrl(uploaded.key) : null;
+    const key = ashtakvargaSvgKey(customerId, profileId, planet);
+    const uploaded = await uploadSvg(key, data.chartImage);
+    if (uploaded) {
+      chartImageUrl = keyToUrl(uploaded);
+      // Persist into ashtakvargaSvgKeys
+      const current = ((profile.ashtakvargaSvgKeys ?? {}) as Record<string, string>);
+      await prisma.kundliProfile.update({
+        where: { id: profileId },
+        data: { ashtakvargaSvgKeys: { ...current, [planet]: key } },
+      }).catch(() => {}); // non-critical
+    }
+  } else {
+    // Try to return previously cached URL
+    const cached = ((profile.ashtakvargaSvgKeys ?? {}) as Record<string, string>)[planet];
+    chartImageUrl = keyToUrl(cached);
   }
 
   return { ...data, chartImage: chartImageUrl };
 }
+
+// ── Dasha ─────────────────────────────────────────────────────────────────────
 
 export async function getFullDashaForProfile(customerId: string, profileId: string) {
   const profile = await prisma.kundliProfile.findFirst({
@@ -365,8 +413,8 @@ export async function matchKundli(
       profileAId,
       profileBId,
       scorePoints: result.totalPoints,
-      scoreLabel:  result.scoreLabel,
-      breakdown:   result.breakdown as object,
+      scoreLabel: result.scoreLabel,
+      breakdown: result.breakdown as object,
     },
   });
 
@@ -376,18 +424,11 @@ export async function matchKundli(
     action: 'kundli.matchComputed',
     targetType: 'kundliMatch',
     targetId: match.id,
-    summary: `Kundli match computed: ${profileA.label} ↔ ${profileB.label} — ${result.totalPoints}/36 (${result.scoreLabel})`,
+    summary: `Kundli match: ${profileA.label} ↔ ${profileB.label} — ${result.totalPoints}/36 (${result.scoreLabel})`,
     afterState: { profileAId, profileBId, scorePoints: result.totalPoints },
   });
 
-  return {
-    match,
-    profileA,
-    profileB,
-    conclusion: result.conclusion,
-    manglikBoy:  result.manglikBoy,
-    manglikGirl: result.manglikGirl,
-  };
+  return { match, profileA, profileB, conclusion: result.conclusion, manglikBoy: result.manglikBoy, manglikGirl: result.manglikGirl };
 }
 
 export async function listMatches(customerId: string) {
@@ -396,4 +437,39 @@ export async function listMatches(customerId: string) {
     orderBy: { createdAt: 'desc' },
     include: { profileA: true, profileB: true },
   });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+export function buildChartInput(profile: {
+  birthDate: string;
+  birthTime: string | null;
+  birthLat: string;
+  birthLng: string;
+  timezoneOffset: string;
+}): BirthChartInput {
+  const timePart = profile.birthTime ?? '12:00';
+  const [year, month, day] = profile.birthDate.split('-').map(Number);
+  const [hour, min] = timePart.split(':').map(Number);
+  return {
+    day, month, year,
+    hour, min,
+    lat: Number(profile.birthLat),
+    lon: Number(profile.birthLng),
+    tzone: Number(profile.timezoneOffset),
+  };
+}
+
+function buildVedicParams(input: BirthChartInput): Record<string, unknown> {
+  const dd = String(input.day).padStart(2, '0');
+  const mm = String(input.month).padStart(2, '0');
+  const hh = String(input.hour).padStart(2, '0');
+  const mn = String(input.min).padStart(2, '0');
+  return {
+    dob: `${dd}/${mm}/${input.year}`,
+    tob: `${hh}:${mn}`,
+    lat: input.lat,
+    lon: input.lon,
+    tz: input.tzone,
+  };
 }

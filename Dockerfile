@@ -5,9 +5,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
-COPY tsconfig.json ./
+COPY .swcrc ./
 COPY src/ ./src/
-RUN node --max-old-space-size=2048 node_modules/.bin/tsc
+RUN node_modules/.bin/swc src -d dist --strip-leading-paths
 
 # ── Stage 2: production ───────────────────────────────────────────────────────
 FROM node:20-alpine AS runner

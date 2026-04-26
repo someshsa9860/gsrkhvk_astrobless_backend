@@ -13,9 +13,25 @@ env:
   ECR_REPOSITORY: astrobless-backend
 
 jobs:
+  typecheck:
+    name: TypeScript type check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run typecheck
+
   build-and-push:
     name: Build & push to ECR
     runs-on: ubuntu-latest
+    needs: typecheck
 
     steps:
       - name: Checkout

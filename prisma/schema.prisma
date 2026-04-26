@@ -511,8 +511,13 @@ model KundliProfile {
   timezoneOffset  String    @default("5.5")
   chartData       Json?
   chartComputedAt DateTime? @db.Timestamptz
-  chartD1Key      String?   // storage key for D1 (Rashi) chart SVG — public/kundli/charts/:id/D1.svg
-  chartD9Key      String?   // storage key for D9 (Navamsha) chart SVG — public/kundli/charts/:id/D9.svg
+  // Standardised key: public/kundli/{customerId}/{profileId}/charts/{div}.svg
+  chartSvgKeys    Json?     // { D1, D9, D10, ... } → storage keys
+  // Ashtakvarga chart SVGs: public/kundli/{customerId}/{profileId}/ashtakvarga/{planet}.svg
+  ashtakvargaSvgKeys Json?  // { total, Sun, Moon, ... } → storage keys
+  // Legacy columns kept for zero-downtime migration (will be removed after next deploy)
+  chartD1Key      String?
+  chartD9Key      String?
   createdAt       DateTime  @default(now()) @db.Timestamptz
   updatedAt       DateTime  @default(now()) @updatedAt @db.Timestamptz
 
