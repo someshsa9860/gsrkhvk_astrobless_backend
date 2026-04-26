@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "swc src -d dist --strip-leading-paths",
-    "typecheck": "node --max-old-space-size=3584 node_modules/.bin/tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "lint": "eslint src --ext .ts",
