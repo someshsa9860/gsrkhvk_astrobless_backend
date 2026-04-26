@@ -17,13 +17,13 @@ WORKDIR /app
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 --ingroup nodejs nodejs
 
-# Production deps only (no devDependencies)
+# Production deps (prisma is in dependencies, so included here)
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Compiled output + migrations + startup script
+# Compiled output + prisma schema (for migrate deploy) + startup script
 COPY --from=builder /app/dist ./dist
-COPY migrations/ ./migrations/
+COPY prisma/ ./prisma/
 COPY entrypoint.sh ./entrypoint.sh
 RUN chmod +x entrypoint.sh
 
