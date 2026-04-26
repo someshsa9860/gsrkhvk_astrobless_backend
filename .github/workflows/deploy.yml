@@ -10,7 +10,7 @@ on:
 
 env:
   AWS_REGION: ap-south-1
-  ECR_REPOSITORY: astrobless-backend
+  ECR_REPOSITORY: astrology-backend
 
 jobs:
   build-and-push:
