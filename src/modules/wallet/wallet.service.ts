@@ -7,9 +7,11 @@ import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../observability/auditLogger.js';
 import { reportError } from '../../observability/errorReporter.js';
 import { DEFAULT_CURRENCY } from '../../config/constants.js';
-import { PaymentProviderCapability, type PaymentProviderKey } from '../payments/payments.types.js';
+import { env } from '../../config/env.js';
+import { PaymentProviderCapability, PaymentProviderKey } from '../payments/payments.types.js';
 import type { Wallet, WalletTransaction } from '@prisma/client';
 import { tracer } from '../../lib/tracing.js';
+import { logger } from '../../lib/logger.js';
 import { sendPush } from '../notifications/notifications.service.js';
 
 export async function getWallet(customerId: string): Promise<Wallet> {
@@ -176,4 +178,131 @@ export async function getTransactions(customerId: string, page: number, limit: n
 
 export async function listTopupProviders() {
   return providerRegistry.topupProviders().map((p) => ({ key: p.key, capabilities: p.capabilities }));
+}
+
+/**
+ * Verify an in-app purchase from Google Play or Apple IAP and credit the wallet.
+ * Idempotent: duplicate storeTransactionId returns the existing walletTransactionId.
+ */
+export async function verifyIapTopup(input: {
+  customerId: string;
+  platform: 'android' | 'ios';
+  productId: string;
+  amount: number; // in 1/100 of ₹1
+  idempotencyKey: string;
+  /** Google Play: purchaseToken. Apple: base64 receipt data */
+  token: string;
+  /** Google Play: transactionId from BillingClient (for idempotency lookup). Apple: transactionId from StoreKit */
+  transactionId: string;
+  /** Android only */
+  packageName?: string;
+}): Promise<{ storeTransactionId: string; creditedAmount: number; walletTransactionId: string }> {
+  const { customerId, platform, productId, amount, idempotencyKey, token, transactionId, packageName } = input;
+  const span = tracer.startSpan('wallet.iapTopup');
+
+  try {
+    // Idempotency: if we've already processed this storeTransactionId, return early
+    const existing = await repo.findTransactionByIdempotencyKey(idempotencyKey);
+    if (existing) {
+      return { storeTransactionId: transactionId, creditedAmount: existing.amount, walletTransactionId: existing.id };
+    }
+
+    // Verify with the respective store
+    let storeTransactionId: string;
+    let resolvedProductId: string;
+    const providerKey = platform === 'android' ? PaymentProviderKey.GOOGLE_PLAY : PaymentProviderKey.APPLE_IAP;
+
+    if (platform === 'android') {
+      const pkg = packageName ?? env.GOOGLE_PLAY_PACKAGE_NAME;
+      if (!pkg) throw new AppError('PAYMENT_PROVIDER_ERROR', 'GOOGLE_PLAY_PACKAGE_NAME not configured.', 500);
+      const { orderId, isValid } = await providerRegistry.getGooglePlay().verifyPurchase(pkg, productId, token);
+      if (!isValid) throw new AppError('PAYMENT_PROVIDER_ERROR', 'Google Play purchase is not valid.', 400);
+      storeTransactionId = orderId;
+      resolvedProductId = productId;
+    } else {
+      const { storeTransactionId: sid, isValid, productId: pid } = await providerRegistry.getAppleIap().verifyReceipt(token, transactionId);
+      if (!isValid) throw new AppError('PAYMENT_PROVIDER_ERROR', 'Apple IAP receipt is not valid.', 400);
+      storeTransactionId = sid;
+      resolvedProductId = pid;
+    }
+
+    // Check for duplicate storeTransactionId across all payment orders
+    const dupOrder = await prisma.paymentOrder.findFirst({ where: { storeTransactionId } });
+    if (dupOrder?.status === 'paid') {
+      const dupTxn = await repo.findTransactionByIdempotencyKey(idempotencyKey);
+      if (dupTxn) return { storeTransactionId, creditedAmount: dupTxn.amount, walletTransactionId: dupTxn.id };
+    }
+
+    // Create payment order record
+    const order = await repo.createPaymentOrder({
+      customerId,
+      providerKey,
+      amount,
+      currency: DEFAULT_CURRENCY,
+      status: 'created',
+      idempotencyKey,
+      traceId: (await import('../../lib/context.js')).getContext().traceId,
+    });
+    await repo.updatePaymentOrder(order.id, { platform, storeTransactionId, status: 'pending' });
+
+    // Credit the wallet inside a transaction
+    let walletTxnId: string;
+    await prisma.$transaction(async (tx) => {
+      const wallet = await repo.findWalletByCustomerIdForUpdate(customerId, tx);
+      if (!wallet) throw new AppError('NOT_FOUND', 'Wallet not found.', 404);
+
+      const newBalance = wallet.balance + amount;
+      await repo.updateWalletBalance(wallet.id, newBalance, tx);
+
+      const txn = await repo.insertTransaction({
+        walletId: wallet.id,
+        customerId,
+        type: 'TOPUP',
+        direction: 'CREDIT',
+        amount,
+        balanceAfter: newBalance,
+        referenceType: 'paymentOrder',
+        referenceId: order.id,
+        idempotencyKey,
+        notes: `IAP via ${providerKey} — product ${resolvedProductId}`,
+      }, tx);
+      walletTxnId = txn.id;
+
+      await repo.updatePaymentOrder(order.id, { status: 'paid', providerPaymentId: storeTransactionId, paidAt: new Date() }, tx);
+
+      await writeAuditLog({
+        actorType: 'customer',
+        actorId: customerId,
+        action: 'wallet.topup',
+        targetType: 'wallet',
+        targetId: wallet.id,
+        summary: `Wallet credited ${amount} via ${providerKey} (IAP) — product ${resolvedProductId}`,
+        beforeState: { balance: wallet.balance },
+        afterState: { balance: newBalance },
+        metadata: { providerKey, storeTransactionId, productId: resolvedProductId, idempotencyKey },
+      }, tx);
+    });
+
+    // Acknowledge Google Play purchase (non-blocking — failure doesn't break the credit)
+    if (platform === 'android') {
+      const pkg = packageName ?? env.GOOGLE_PLAY_PACKAGE_NAME;
+      providerRegistry.getGooglePlay().acknowledgePurchase(pkg, productId, token).catch((err: unknown) => {
+        logger.warn({ err, storeTransactionId }, 'Google Play acknowledge failed');
+      });
+    }
+
+    walletTopupTotal.inc({ provider: providerKey, status: 'succeeded' });
+
+    const displayAmount = (amount / 100).toFixed(2);
+    sendPush('customer', customerId, 'Wallet Topped Up', `₹${displayAmount} added via ${platform === 'android' ? 'Google Play' : 'App Store'}.`, { type: 'walletUpdated' }).catch(() => {});
+
+    span.setAttribute('status', 'OK');
+    return { storeTransactionId, creditedAmount: amount, walletTransactionId: walletTxnId! };
+  } catch (err) {
+    span.recordException(err as Error);
+    await reportError({ error: err as Error, source: 'httpRoute', sourceDetail: 'wallet.iapTopup', metadata: { customerId, platform } });
+    throw err;
+  } finally {
+    span.end();
+  }
 }

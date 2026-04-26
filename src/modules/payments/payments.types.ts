@@ -4,6 +4,8 @@ export enum PaymentProviderKey {
   GOOGLE_PAY = 'googlePay',
   APPLE_PAY = 'applePay',
   STRIPE = 'stripe',
+  GOOGLE_PLAY = 'googlePlay',    // Android in-app purchase via Google Play Billing
+  APPLE_IAP = 'appleIap',        // iOS in-app purchase via App Store
 }
 
 export enum PaymentProviderCapability {
@@ -55,4 +57,28 @@ export interface PaymentProvider {
   fetchOrder(providerOrderId: string): Promise<ProviderWebhookEvent>;
   createPayout?(input: PayoutInput): Promise<PayoutResult>;
   refund?(providerPaymentId: string, amount: number, idempotencyKey: string): Promise<ProviderWebhookEvent>;
+}
+
+// ── IAP (Google Play / Apple IAP) ─────────────────────────────────────────────
+
+export interface IapVerifyInput {
+  customerId: string;
+  /** Product ID configured in Google Play Console / App Store Connect */
+  productId: string;
+  /** The wallet credit amount this product maps to (in 1/100 of ₹1) */
+  amount: number;
+  idempotencyKey: string;
+  /** Google Play: purchase token from BillingClient. Apple: transactionId from StoreKit 2 */
+  token: string;
+  /** Google Play: packageName. Apple: not needed (inferred from shared secret) */
+  packageName?: string;
+  platform: 'android' | 'ios';
+}
+
+export interface IapVerifyResult {
+  /** Canonical transaction ID returned by the store */
+  storeTransactionId: string;
+  /** The wallet credit that was applied */
+  creditedAmount: number;
+  walletTransactionId: string;
 }

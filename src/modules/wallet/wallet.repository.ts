@@ -59,6 +59,10 @@ export async function updatePaymentOrder(id: string, data: {
   providerOrderId?: string;
   providerPaymentId?: string;
   status?: string;
+  platform?: string;
+  storeTransactionId?: string;
+  refundedAmount?: number;
+  refundStatus?: string;
   clientPayload?: string;
   webhookPayload?: string;
   failureReason?: string;

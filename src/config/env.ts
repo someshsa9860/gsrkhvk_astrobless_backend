@@ -61,6 +61,14 @@ const envSchema = z.object({
   STRIPE_SECRET_KEY: z.string().default(''),
   STRIPE_WEBHOOK_SECRET: z.string().default(''),
 
+  // Google Play Billing (Android IAP)
+  GOOGLE_PLAY_PACKAGE_NAME: z.string().default(''),          // e.g. com.astrobless.app
+  GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: z.string().default(''), // path or inline JSON for Play Developer API
+
+  // Apple In-App Purchase (iOS)
+  APPLE_IAP_SHARED_SECRET: z.string().default(''),           // App-specific shared secret from App Store Connect
+  APPLE_IAP_VERIFY_URL: z.string().default('https://buy.itunes.apple.com/verifyReceipt'), // prod URL
+
   // Agora (calls)
   AGORA_APP_ID: z.string().default(''),
   AGORA_APP_CERTIFICATE: z.string().default(''),

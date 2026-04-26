@@ -9,6 +9,7 @@ import {
   TransactionListQuerySchema,
   PayoutListQuerySchema,
   ApprovePayoutSchema,
+  PaymentOrderListQuerySchema,
 } from './adminFinance.schema.js';
 
 // ── Finance routes ────────────────────────────────────────────────────────────
@@ -50,5 +51,28 @@ export const adminFinanceRoutes: FastifyPluginAsync = async (app) => {
     },
     preHandler: [audience, requirePermission(AdminPermission.PAYOUT_APPROVE)],
     handler: ctrl.approvePayout,
+  });
+
+  app.get('/v1/admin/finance/payment-orders', {
+    schema: {
+      tags: ['admin:finance'],
+      summary: 'List payment orders',
+      description: 'All top-up payment orders across all providers and platforms. Filterable by status, provider, platform, customerId, date range.',
+      security: [{ bearerAuth: [] }],
+      querystring: zodToJsonSchema(PaymentOrderListQuerySchema),
+    },
+    preHandler: [audience, requirePermission(AdminPermission.PAYMENT_VIEW)],
+    handler: ctrl.listPaymentOrders,
+  });
+
+  app.get('/v1/admin/finance/payment-orders/:id', {
+    schema: {
+      tags: ['admin:finance'],
+      summary: 'Get a single payment order',
+      description: 'Full payment order detail including customer info, webhook payloads, and IAP transaction ID.',
+      security: [{ bearerAuth: [] }],
+    },
+    preHandler: [audience, requirePermission(AdminPermission.PAYMENT_VIEW)],
+    handler: ctrl.getPaymentOrder,
   });
 };

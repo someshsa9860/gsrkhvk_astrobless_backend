@@ -1,7 +1,7 @@
 import { JWT_AUDIENCE } from '../../config/constants.js';
 import type { FastifyPluginAsync } from 'fastify';
 import * as ctrl from './wallet.controller.js';
-import { TopupSchema, WalletTransactionQuerySchema } from './wallet.schema.js';
+import { TopupSchema, IapTopupSchema, WalletTransactionQuerySchema } from './wallet.schema.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 export const walletRoutes: FastifyPluginAsync = async (app) => {
@@ -41,5 +41,17 @@ export const walletRoutes: FastifyPluginAsync = async (app) => {
     },
     preHandler: [guard],
     handler: ctrl.getTransactions,
+  });
+
+  app.post(`${prefix}/topup/iap`, {
+    schema: {
+      tags: ['customer:wallet'],
+      summary: 'Verify an in-app purchase and credit wallet',
+      description: 'Verifies a Google Play or Apple IAP purchase server-side and credits the customer wallet. Idempotent — duplicate transactionId returns the existing result.',
+      security: [{ bearerAuth: [] }],
+      body: zodToJsonSchema(IapTopupSchema),
+    },
+    preHandler: [guard],
+    handler: ctrl.verifyIapTopup,
   });
 };

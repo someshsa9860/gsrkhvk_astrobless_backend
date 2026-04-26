@@ -1,6 +1,6 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import * as service from './wallet.service.js';
-import type { TopupSchema, WalletTransactionQuerySchema } from './wallet.schema.js';
+import type { TopupSchema, IapTopupSchema, WalletTransactionQuerySchema } from './wallet.schema.js';
 import type { z } from 'zod';
 
 export async function getWallet(req: FastifyRequest, reply: FastifyReply) {
@@ -26,4 +26,18 @@ export async function initiateTopup(req: FastifyRequest<{ Body: z.infer<typeof T
 export async function getTransactions(req: FastifyRequest<{ Querystring: z.infer<typeof WalletTransactionQuerySchema> }>, reply: FastifyReply) {
   const result = await service.getTransactions(req.requestContext.actorId!, req.query.page, req.query.limit);
   return reply.send({ ok: true, data: result, traceId: req.requestContext.traceId });
+}
+
+export async function verifyIapTopup(req: FastifyRequest<{ Body: z.infer<typeof IapTopupSchema> }>, reply: FastifyReply) {
+  const result = await service.verifyIapTopup({
+    customerId: req.requestContext.actorId!,
+    platform: req.body.platform,
+    productId: req.body.productId,
+    amount: req.body.amount,
+    idempotencyKey: req.body.idempotencyKey,
+    token: req.body.token,
+    transactionId: req.body.transactionId,
+    packageName: req.body.packageName,
+  });
+  return reply.status(201).send({ ok: true, data: result, traceId: req.requestContext.traceId });
 }

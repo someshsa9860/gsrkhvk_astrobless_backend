@@ -250,12 +250,16 @@ model WalletTransaction {
 model PaymentOrder {
   id                String    @id @default(uuid())
   customerId        String
-  providerKey       String
+  providerKey       String    // razorpay | phonepe | googlePay | applePay | stripe | googlePlay | appleIap
   providerOrderId   String?
   providerPaymentId String?
-  amount            Float
+  amount            Int       // stored as 1/100 of ₹1 (integer, never float)
   currency          String    @default("INR")
-  status            String
+  status            String    // created | pending | paid | failed | expired
+  platform          String?   // ios | android | web — which platform initiated the payment
+  storeTransactionId String?  // Google Play / Apple IAP native transaction ID
+  refundedAmount    Int?      // amount refunded so far (integer, same unit as amount)
+  refundStatus      String?   // none | partial | full
   idempotencyKey    String    @unique
   clientPayload     String?
   webhookPayload    String?
@@ -269,6 +273,8 @@ model PaymentOrder {
   customer          Customer  @relation(fields: [customerId], references: [id])
   orders            Order[]
 
+  @@index([customerId, createdAt(sort: Desc)], name: "idx_paymentOrders_customerId_createdAt")
+  @@index([status, providerKey], name: "idx_paymentOrders_status_providerKey")
   @@map("paymentOrders")
 }
 

@@ -35,3 +35,22 @@ export const ApprovePayoutSchema = z.object({
 });
 
 export type ApprovePayoutInput = z.infer<typeof ApprovePayoutSchema>;
+
+// ── Payment orders ────────────────────────────────────────────────────────────
+
+export const PaymentOrderListQuerySchema = ListQuerySchema.extend({
+  status: z
+    .enum(['created', 'pending', 'paid', 'failed', 'expired'])
+    .optional()
+    .describe('Filter by payment order status'),
+  providerKey: z
+    .enum(['razorpay', 'phonepe', 'googlePay', 'applePay', 'stripe', 'googlePlay', 'appleIap'])
+    .optional()
+    .describe('Filter by payment provider'),
+  platform: z.enum(['ios', 'android', 'web']).optional().describe('Filter by platform'),
+  customerId: z.string().uuid().optional().describe('Filter to a specific customer'),
+  from: z.string().optional().describe('ISO date — createdAt >= from'),
+  to: z.string().optional().describe('ISO date — createdAt <= to'),
+});
+
+export type PaymentOrderListQuery = z.infer<typeof PaymentOrderListQuerySchema>;

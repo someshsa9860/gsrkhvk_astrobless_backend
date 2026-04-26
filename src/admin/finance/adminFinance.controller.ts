@@ -2,7 +2,7 @@
 
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import * as service from './adminFinance.service.js';
-import type { TransactionListQuery, PayoutListQuery, ApprovePayoutInput } from './adminFinance.schema.js';
+import type { TransactionListQuery, PayoutListQuery, ApprovePayoutInput, PaymentOrderListQuery } from './adminFinance.schema.js';
 
 export async function listTransactions(
   req: FastifyRequest<{ Querystring: TransactionListQuery }>,
@@ -25,5 +25,21 @@ export async function approvePayout(
   reply: FastifyReply,
 ) {
   const data = await service.approvePayout(req.requestContext.actorId!, req.params.id, req.body);
+  return reply.send({ ok: true, data, traceId: req.requestContext.traceId });
+}
+
+export async function listPaymentOrders(
+  req: FastifyRequest<{ Querystring: PaymentOrderListQuery }>,
+  reply: FastifyReply,
+) {
+  const data = await service.listPaymentOrders(req.query);
+  return reply.send({ ok: true, data, traceId: req.requestContext.traceId });
+}
+
+export async function getPaymentOrder(
+  req: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply,
+) {
+  const data = await service.getPaymentOrder(req.params.id);
   return reply.send({ ok: true, data, traceId: req.requestContext.traceId });
 }

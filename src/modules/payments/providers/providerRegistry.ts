@@ -1,5 +1,7 @@
 import { RazorpayProvider } from './razorpayProvider.js';
 import { PhonePeProvider } from './phonepeProvider.js';
+import { GooglePlayProvider } from './googlePlayProvider.js';
+import { AppleIapProvider } from './appleIapProvider.js';
 import type { PaymentProvider } from '../payments.types.js';
 import { PaymentProviderKey, PaymentProviderCapability } from '../payments.types.js';
 import { AppError } from '../../../lib/errors.js';
@@ -10,6 +12,8 @@ class ProviderRegistry {
   constructor() {
     this.register(new RazorpayProvider());
     this.register(new PhonePeProvider());
+    this.register(new GooglePlayProvider());
+    this.register(new AppleIapProvider());
   }
 
   private register(provider: PaymentProvider): void {
@@ -28,6 +32,14 @@ class ProviderRegistry {
 
   topupProviders(): PaymentProvider[] {
     return this.listByCapability(PaymentProviderCapability.TOPUP);
+  }
+
+  getGooglePlay(): GooglePlayProvider {
+    return this.providers.get(PaymentProviderKey.GOOGLE_PLAY) as GooglePlayProvider;
+  }
+
+  getAppleIap(): AppleIapProvider {
+    return this.providers.get(PaymentProviderKey.APPLE_IAP) as AppleIapProvider;
   }
 }
 
