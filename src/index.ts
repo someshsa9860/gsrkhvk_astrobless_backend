@@ -1,7 +1,7 @@
-// Prisma returns BigInt for bigint DB columns (money fields, viewCount, etc.).
-// Fastify serializes responses with JSON.stringify, which can't handle BigInt.
-// Patching prototype here — before any module loads — converts all BigInts to
-// Number at serialization time. All money values fit safely in Number (< 2^53).
+// API-only entry point — Fastify REST server.
+// Socket.IO runs in a separate container (src/socket/index.ts).
+// BullMQ workers run in a separate container (src/worker/index.ts).
+
 (BigInt.prototype as unknown as { toJSON(): number }).toJSON = function () {
   return Number(this);
 };
@@ -10,65 +10,45 @@ import * as Sentry from '@sentry/node';
 import { buildApp } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
-import { redis, pubRedis, subRedis } from './lib/redis.js';
-import { initChatGateway } from './modules/chat/chat.gateway.js';
-import { startSystemErrorWorker } from './jobs/workers/systemErrorIngest.worker.js';
-import { startTempCleanupWorker } from './jobs/workers/tempCleanup.worker.js';
+import { redis } from './lib/redis.js';
 
-// ── Sentry ────────────────────────────────────────────────────────────────
 if (env.SENTRY_DSN) {
   Sentry.init({ dsn: env.SENTRY_DSN, environment: env.NODE_ENV, release: env.APP_VERSION });
 }
 
 async function main(): Promise<void> {
-  // Verify Redis is reachable (lazyConnect: true means connect happens on first command)
   await redis.ping();
-  logger.info('Redis connections established');
+  logger.info('API: Redis connection established');
 
   const app = await buildApp();
-  const httpServer = app.server;
 
-  // ── Socket.IO ─────────────────────────────────────────────────────────────
-  const io = initChatGateway(httpServer);
-  logger.info('Socket.IO gateway initialized');
-
-  // ── BullMQ workers ────────────────────────────────────────────────────────
-  startSystemErrorWorker();
-  startTempCleanupWorker();
-  logger.info('BullMQ workers started');
-
-  // ── Graceful shutdown ─────────────────────────────────────────────────────
   const shutdown = async (signal: string): Promise<void> => {
-    logger.info({ signal }, 'Shutting down...');
+    logger.info({ signal }, 'API: shutting down...');
     await app.close();
-    io.close();
     await redis.quit();
-    await pubRedis.quit();
-    await subRedis.quit();
-    logger.info('Graceful shutdown complete');
+    logger.info('API: graceful shutdown complete');
     process.exit(0);
   };
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
 
   process.on('unhandledRejection', (reason) => {
-    logger.error({ reason }, 'Unhandled promise rejection');
+    logger.error({ reason }, 'API: unhandled promise rejection');
     Sentry.captureException(reason);
   });
 
   process.on('uncaughtException', (err) => {
-    logger.error({ err }, 'Uncaught exception');
+    logger.error({ err }, 'API: uncaught exception');
     Sentry.captureException(err);
     process.exit(1);
   });
 
-  // ── Start ─────────────────────────────────────────────────────────────────
   await app.listen({ port: env.PORT, host: env.HOST });
-  logger.info({ port: env.PORT, host: env.HOST, env: env.NODE_ENV }, `${env.APP_NAME} backend started`);
+  logger.info({ port: env.PORT, host: env.HOST, env: env.NODE_ENV }, `${env.APP_NAME} API started`);
 }
 
 main().catch((err) => {
-  logger.error({ err }, 'Fatal startup error');
+  logger.error({ err }, 'API: fatal startup error');
   process.exit(1);
 });

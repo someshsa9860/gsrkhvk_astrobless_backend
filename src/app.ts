@@ -31,11 +31,7 @@ import { contentRoutes } from './modules/content/content.routes.js';
 import { aiRoutes } from './modules/ai/ai.routes.js';
 import { kundliRoutes } from './modules/kundli/kundli.routes.js';
 import { adminPlugin } from './admin/index.js';
-import { setupScheduler } from './jobs/scheduler.js';
-import { startHoroscopeWorker } from './jobs/workers/horoscopeGeneration.worker.js';
 import { customerUploadRoutes, astrologerUploadRoutes, adminUploadRoutes, localPresignUploadRoute } from './modules/uploads/uploadRoutes.js';
-import { imageReoptimizeWorker } from './jobs/workers/imageReoptimize.worker.js';
-import { env } from './config/env.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -137,12 +133,6 @@ export async function buildApp() {
   await app.register(adminPlugin);
 
   logger.info('All routes registered');
-
-  // Start background workers and cron scheduler (idempotent — safe to call multiple times).
-  startHoroscopeWorker();
-  // imageReoptimizeWorker is imported for its side-effect (worker registration).
-  void imageReoptimizeWorker;
-  await setupScheduler();
 
   return app;
 }
