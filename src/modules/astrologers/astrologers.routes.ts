@@ -121,6 +121,16 @@ export const astrologerRoutes: FastifyPluginAsync = async (app) => {
     handler: ctrl.searchAstrologers,
   });
 
+  // /trending must be registered before /:id so Fastify matches it as a static segment
+  app.get('/v1/public/astrologers/trending', {
+    schema: {
+      tags: ['public:horoscope'],
+      summary: 'Top trending astrologers (sorted by rating, limit 10)',
+      querystring: zodToJsonSchema(SearchAstrologersQuerySchema),
+    },
+    handler: ctrl.getTrendingAstrologers,
+  });
+
   app.get('/v1/public/astrologers/:id', {
     schema: { tags: ['public:horoscope'], summary: 'Public astrologer profile' },
     handler: ctrl.getPublicProfile,

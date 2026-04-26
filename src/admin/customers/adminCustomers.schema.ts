@@ -16,7 +16,7 @@ export type CustomerListQuery = z.infer<typeof CustomerListQuerySchema>;
 // ── Block customer ────────────────────────────────────────────────────────────
 
 export const BlockCustomerSchema = z.object({
-  reason: z.string().min(3).describe('Human-readable reason for the block (audited)'),
+  reason: z.string().optional().describe('Optional reason for the block (audited)'),
 });
 
 export type BlockCustomerInput = z.infer<typeof BlockCustomerSchema>;
@@ -25,7 +25,7 @@ export type BlockCustomerInput = z.infer<typeof BlockCustomerSchema>;
 
 export const WalletAdjustSchema = z.object({
   amount: z.number().int().positive().describe('Amount to credit — must be positive integer'),
-  reason: z.string().min(3).describe('Mandatory reason for audit trail'),
+  reason: z.string().optional().describe('Optional reason for audit trail'),
   type: z.enum(['GOODWILL', 'COMPENSATION', 'BONUS', 'ADMIN_ADJUST']).describe('Transaction sub-type'),
 });
 

@@ -15,7 +15,12 @@ import { verifyGoogleToken, verifyAppleToken } from '../../lib/tokenVerifier.js'
 import { upsertAppleCredential } from '../../lib/appleCredentials.js';
 import { env } from '../../config/env.js';
 import type { TokenPair } from '../../lib/jwt.js';
-import type { Prisma } from '@prisma/client';
+import type { Prisma, Customer } from '@prisma/client';
+
+export interface LoginResponse extends TokenPair {
+  customer: Pick<Customer, 'id' | 'name' | 'phone' | 'email' | 'profileImageKey' | 'emailVerified' | 'gender' | 'dob' | 'createdAt'>;
+  isNewUser: boolean;
+}
 
 export interface DeviceInfo {
   deviceId?: string;
@@ -35,7 +40,7 @@ export async function sendPhoneOtp(phone: string): Promise<void> {
   if (process.env['NODE_ENV'] !== 'production') logger.debug({ otp }, 'DEV OTP');
 }
 
-export async function verifyPhoneOtp(phone: string, otp: string, name?: string, ipAddress?: string): Promise<TokenPair> {
+export async function verifyPhoneOtp(phone: string, otp: string, name?: string, ipAddress?: string): Promise<LoginResponse> {
   await verifyAndConsumeOtp(PERSONA, 'phone', phone, otp);
   const geo = lookupIp(ipAddress);
   const ctx = getContext();
@@ -62,7 +67,7 @@ export async function verifyPhoneOtp(phone: string, otp: string, name?: string, 
       await tx.wallet.create({ data: { customerId: customer.id } });
     }
 
-    const session = await createSession(tx, customer.id, 'customer', device);
+    const session = await createSession(tx, customer.id, 'customer', device, isNew);
     await writeAuditLog({
       actorType: 'customer', actorId: customer.id,
       action: isNew ? 'customer.signup' : 'customer.login',
@@ -114,7 +119,7 @@ export async function emailSignup(email: string, password: string, name: string,
   return { pendingVerification: true };
 }
 
-export async function verifyEmailOtp(email: string, otp: string): Promise<TokenPair> {
+export async function verifyEmailOtp(email: string, otp: string): Promise<LoginResponse> {
   await verifyAndConsumeOtp(PERSONA, 'email', email, otp);
   const ctx = getContext();
   const device: DeviceInfo = { deviceId: ctx.deviceId, deviceModel: ctx.deviceModel, deviceName: ctx.deviceName, osName: ctx.osName, osVersion: ctx.osVersion };
@@ -132,7 +137,7 @@ export async function verifyEmailOtp(email: string, otp: string): Promise<TokenP
   });
 }
 
-export async function emailLogin(email: string, password: string): Promise<TokenPair> {
+export async function emailLogin(email: string, password: string): Promise<LoginResponse> {
   const identity = await prisma.customerAuthIdentity.findFirst({
     where: { providerKey: 'emailPassword', providerUserId: email },
   });
@@ -152,11 +157,11 @@ export async function emailLogin(email: string, password: string): Promise<Token
 
   return prisma.$transaction(async (tx) => {
     await writeAuditLog({ actorType: 'customer', actorId: customer.id, action: 'customer.login', summary: 'Login via email' }, tx);
-    return createSession(tx, customer.id, 'customer', device);
+    return createSession(tx, customer.id, 'customer', device, false);
   });
 }
 
-export async function googleAuth(idToken: string, device?: DeviceInfo): Promise<TokenPair> {
+export async function googleAuth(idToken: string, device?: DeviceInfo): Promise<LoginResponse> {
   const payload = await verifyGoogleToken(idToken, env.GOOGLE_OAUTH_CLIENT_ID);
   const { sub, email, name, picture } = payload;
 
@@ -194,11 +199,11 @@ export async function googleAuth(idToken: string, device?: DeviceInfo): Promise<
     }
 
     await writeAuditLog({ actorType: 'customer', actorId: customerId, action: isNew ? 'customer.signup' : 'customer.login', targetType: 'customer', targetId: customerId, summary: isNew ? 'Signed up via Google' : 'Login via Google' }, tx);
-    return createSession(tx, customerId, 'customer', resolvedDevice);
+    return createSession(tx, customerId, 'customer', resolvedDevice, isNew);
   });
 }
 
-export async function appleAuth(identityToken: string, _nonce: string, name?: string, device?: DeviceInfo): Promise<TokenPair> {
+export async function appleAuth(identityToken: string, _nonce: string, name?: string, device?: DeviceInfo): Promise<LoginResponse> {
   const payload = await verifyAppleToken(identityToken, env.APPLE_SERVICE_ID);
   const { sub, email } = payload;
 
@@ -240,7 +245,7 @@ export async function appleAuth(identityToken: string, _nonce: string, name?: st
     }
 
     await writeAuditLog({ actorType: 'customer', actorId: customerId, action: isNew ? 'customer.signup' : 'customer.login', targetType: 'customer', targetId: customerId, summary: isNew ? 'Signed up via Apple Sign-In' : 'Login via Apple Sign-In' }, tx);
-    return createSession(tx, customerId, 'customer', resolvedDevice);
+    return createSession(tx, customerId, 'customer', resolvedDevice, isNew);
   });
 }
 
@@ -325,26 +330,32 @@ export async function logout(sessionId: string, subjectId: string): Promise<void
 
 type Tx = Prisma.TransactionClient;
 
-async function createSession(tx: Tx, subjectId: string, persona: 'customer', device?: DeviceInfo): Promise<TokenPair> {
+async function createSession(tx: Tx, subjectId: string, persona: 'customer', device?: DeviceInfo, isNew = false): Promise<LoginResponse> {
   const pair = await issueTokenPair(subjectId, JWT_AUDIENCE.CUSTOMER);
   const refreshHash = pair.refreshToken ? await bcrypt.hash(pair.refreshToken, 6) : '';
 
-  await tx.authSession.create({
-    data: {
-      audience: persona,
-      subjectId,
-      refreshTokenHash: refreshHash,
-      sessionId: pair.sessionId,
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      deviceId: device?.deviceId ?? null,
-      deviceModel: device?.deviceModel ?? null,
-      deviceName: device?.deviceName ?? null,
-      osName: device?.osName ?? null,
-      osVersion: device?.osVersion ?? null,
-    },
-  });
+  const [customer] = await Promise.all([
+    tx.customer.findUniqueOrThrow({
+      where: { id: subjectId },
+      select: { id: true, name: true, phone: true, email: true, profileImageKey: true, emailVerified: true, gender: true, dob: true, createdAt: true },
+    }),
+    tx.authSession.create({
+      data: {
+        audience: persona,
+        subjectId,
+        refreshTokenHash: refreshHash,
+        sessionId: pair.sessionId,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        deviceId: device?.deviceId ?? null,
+        deviceModel: device?.deviceModel ?? null,
+        deviceName: device?.deviceName ?? null,
+        osName: device?.osName ?? null,
+        osVersion: device?.osVersion ?? null,
+      },
+    }),
+  ]);
 
-  return pair;
+  return { ...pair, customer, isNewUser: isNew };
 }
 
 function maskEmail(email: string): string {

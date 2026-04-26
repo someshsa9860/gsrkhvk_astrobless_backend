@@ -1,5 +1,5 @@
 import { prisma } from '../../db/client.js';
-import { upsertFcmToken } from '../notifications/notifications.service.js';
+import { upsertFcmToken, subscribeToTopic, unsubscribeFromTopic } from '../notifications/notifications.service.js';
 import type { z } from 'zod';
 import type { ListNotificationsQuerySchema, MarkReadSchema } from './notifications.schema.js';
 
@@ -54,9 +54,13 @@ export async function getUnreadCount(astrologerId: string): Promise<number> {
 
 export async function registerFcmToken(astrologerId: string, token: string, platform: 'ios' | 'android' | 'web') {
   await upsertFcmToken('astrologer', astrologerId, token, platform);
+  // Subscribe device to astrologer's personal topic so sendPush() works
+  // without a DB lookup. Topic = astrologerId.
+  void subscribeToTopic(token, astrologerId);
 }
 
 export async function deleteFcmToken(astrologerId: string, token: string) {
+  void unsubscribeFromTopic(token, astrologerId);
   await prisma.fcmToken.deleteMany({
     where: { token, ownerType: 'astrologer', ownerId: astrologerId },
   });

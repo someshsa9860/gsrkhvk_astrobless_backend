@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import * as service from './content.service.js';
 import { getSettingValue } from '../../admin/settings/adminSettings.service.js';
+import { listPublicBanners } from '../../admin/content/adminBanners.service.js';
 
 function todayKey(): string { return new Date().toISOString().slice(0, 10); }
 function monthKey(): string { return new Date().toISOString().slice(0, 7); }
@@ -73,6 +74,16 @@ export const contentRoutes: FastifyPluginAsync = async (app) => {
     handler: async (req, reply) => {
       const signs = await service.listHoroscopeSigns();
       return reply.send({ ok: true, data: { signs }, traceId: req.requestContext.traceId });
+    },
+  });
+
+  // Public banners (no auth — consumed by both mobile apps)
+  app.get('/v1/public/banners', {
+    schema: { tags: ['public:content'], summary: 'Get active banners for a placement' },
+    handler: async (req, reply) => {
+      const { placement = 'home' } = req.query as { placement?: string };
+      const data = await listPublicBanners(placement);
+      return reply.send({ ok: true, data, traceId: req.requestContext.traceId });
     },
   });
 

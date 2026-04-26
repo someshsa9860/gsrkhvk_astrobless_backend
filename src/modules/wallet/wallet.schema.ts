@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { PaymentProviderKey } from '../payments/payments.types.js';
 
 export const TopupSchema = z.object({
-  amount: z.number().int().min(100).describe('Minimum top-up amount'),
+  amount: z.number().min(1).describe('Top-up amount in ₹'),
   providerKey: z.nativeEnum(PaymentProviderKey),
   idempotencyKey: z.string().uuid().describe('Client-generated UUID for idempotency'),
 });

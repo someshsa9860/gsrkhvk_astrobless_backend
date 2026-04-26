@@ -16,6 +16,12 @@ export async function setOnlineStatus(id: string, isOnline: boolean): Promise<vo
 }
 
 export async function search(params: z.infer<typeof SearchAstrologersQuerySchema>): Promise<{ items: Astrologer[]; total: number }> {
+  const page = params.page ?? 1;
+  const limit = params.limit ?? 20;
+  const sort = params.sort ?? 'rating';
+  const order = params.order ?? 'desc';
+  const searchText = params.q ?? params.search;
+
   const where: Prisma.AstrologerWhereInput = {
     isBlocked: false,
     isVerified: true,
@@ -23,21 +29,23 @@ export async function search(params: z.infer<typeof SearchAstrologersQuerySchema
 
   if (params.isOnline !== undefined) where.isOnline = params.isOnline;
   if (params.minRating) where.ratingAvg = { gte: String(params.minRating) };
-  if (params.q) where.displayName = { contains: params.q, mode: 'insensitive' };
+  if (searchText) where.displayName = { contains: searchText, mode: 'insensitive' };
+  if (params.specialty) where.specialties = { has: params.specialty };
+  if (params.language) where.languages = { has: params.language };
 
-  const orderField = params.sort === 'price' ? 'pricePerMinChat'
-    : params.sort === 'experience' ? 'experienceYears'
-    : params.sort === 'consultations' ? 'totalConsultations'
+  const orderField = sort === 'price' ? 'pricePerMinChat'
+    : sort === 'experience' ? 'experienceYears'
+    : sort === 'consultations' ? 'totalConsultations'
     : 'ratingAvg';
 
-  const offset = (params.page - 1) * params.limit;
+  const offset = (page - 1) * limit;
 
   const [items, total] = await prisma.$transaction([
     prisma.astrologer.findMany({
       where,
-      orderBy: { [orderField]: params.order === 'asc' ? 'asc' : 'desc' },
+      orderBy: { [orderField]: order === 'asc' ? 'asc' : 'desc' },
       skip: offset,
-      take: params.limit,
+      take: limit,
     }),
     prisma.astrologer.count({ where }),
   ]);

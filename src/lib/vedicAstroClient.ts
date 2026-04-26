@@ -89,6 +89,230 @@ export async function getYearlyHoroscope(sign: ZodiacSign): Promise<VedicHorosco
 
 export { ZODIAC_SIGNS };
 
+// ── Ashtakvarga ───────────────────────────────────────────────────────────────
+
+export type AshtakvargaPlanet =
+  | 'Sun' | 'Moon' | 'Mars' | 'Mercury' | 'Jupiter' | 'Venus' | 'Saturn' | 'total';
+
+export interface AshtakvargaData {
+  planet: string;
+  scores: Record<string, number>;  // sign name → bindus (0-8)
+  chartImage: string | null;        // SVG / base64 — fetched fresh, never persisted
+}
+
+export async function getAshtakvarga(
+  input: BirthChartInput,
+  planet: AshtakvargaPlanet = 'total',
+): Promise<AshtakvargaData> {
+  logger.debug({ planet }, '[VedicAstro] fetching ashtakvarga');
+  const { data } = await client.get<{ status: number; response: Record<string, unknown> }>(
+    '/horoscope/ashtakvarga',
+    { params: { ...birthParams(input), planet } },
+  );
+  const raw = unwrap(data);
+
+  // Response shape: { planet: string, ashtak_varga: { "aries": N, ... } }
+  // or flat: { "aries": N, "taurus": N, ... }
+  const scoresRaw =
+    (raw['ashtak_varga'] as Record<string, number> | undefined) ??
+    (raw['ashtakavarga'] as Record<string, number> | undefined) ??
+    {};
+
+  // Normalise keys to lowercase sign names
+  const scores: Record<string, number> = {};
+  for (const [k, v] of Object.entries(scoresRaw)) {
+    scores[k.toLowerCase()] = Number(v);
+  }
+
+  // Fetch chart image (fresh, not cached)
+  const chartImage = await getAshtakvargaChartImage(input, planet);
+
+  return {
+    planet: planet === 'total' ? 'Total' : planet,
+    scores,
+    chartImage,
+  };
+}
+
+async function getAshtakvargaChartImage(
+  input: BirthChartInput,
+  planet: AshtakvargaPlanet,
+): Promise<string | null> {
+  try {
+    const { data } = await client.get<string>('/horoscope/ashtakvarga-chart-image', {
+      params: {
+        ...birthParams(input),
+        planet,
+        style: 'south',
+        color: '#5C6BC0',
+        size: 300,
+        font_size: 28,
+        format: 'base64',
+      },
+      responseType: 'text',
+    });
+    return typeof data === 'string' && data.trim().startsWith('<') ? data : null;
+  } catch (err) {
+    logger.warn({ planet, err }, '[VedicAstro] ashtakvarga-chart-image failed');
+    return null;
+  }
+}
+
+// ── Divisional charts ─────────────────────────────────────────────────────────
+
+export type DivisionalDiv =
+  | 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10'
+  | 'D11' | 'D12' | 'D16' | 'D20' | 'D24' | 'D27' | 'D30' | 'D40' | 'D45' | 'D60';
+
+export interface DivisionalChartData {
+  div: string;
+  planets: PlanetData[];       // planets in this divisional chart
+  ascendant: string;           // ascendant sign in this chart
+}
+
+export async function getDivisionalChart(
+  input: BirthChartInput,
+  div: DivisionalDiv = 'D1',
+): Promise<DivisionalChartData> {
+  logger.debug({ div }, '[VedicAstro] fetching divisional chart');
+  const { data } = await client.get<{ status: number; response: Record<string, unknown> }>(
+    '/horoscope/divisional-charts',
+    { params: { ...birthParams(input), div, response_type: 'planet_object' } },
+  );
+  const raw = unwrap(data);
+
+  // response_type=planet_object: { "Sun": { zodiac, house, ... }, "Moon": {...}, ... }
+  // Also has "Ascendant" key for ascendant sign
+  const ascendant = String((raw['Ascendant'] as Record<string, unknown>)?.['zodiac'] ?? '');
+
+  const planets: PlanetData[] = [];
+  for (const [name, val] of Object.entries(raw)) {
+    if (name === 'Ascendant') continue;
+    const p = val as Record<string, unknown>;
+    planets.push({
+      name,
+      fullDegree: Number(p['global_degree'] ?? p['full_degree'] ?? 0),
+      normDegree: Number(p['local_degree'] ?? p['norm_degree'] ?? 0),
+      speed: Number(p['speed'] ?? 0),
+      isRetro: Boolean(p['retro'] ?? p['is_retro'] ?? false),
+      sign: String(p['zodiac'] ?? p['sign'] ?? ''),
+      signLord: String(p['zodiac_lord'] ?? p['sign_lord'] ?? ''),
+      nakshatra: String(p['nakshatra'] ?? ''),
+      nakshatraLord: String(p['nakshatra_lord'] ?? ''),
+      nakshatraPada: Number(p['nakshatra_pada'] ?? 0),
+      house: Number(p['house'] ?? 0),
+    });
+  }
+
+  return { div, planets, ascendant };
+}
+
+// ── Dasha (full hierarchy) ────────────────────────────────────────────────────
+
+export interface AntarDashaEntry {
+  planet: string;       // Antar planet name
+  endDate: string;      // ISO date string
+}
+
+export interface MahaDashaEntry {
+  planet: string;       // Maha planet name
+  startDate: string;    // ISO date string
+  endDate: string;      // ISO date string
+  antars: AntarDashaEntry[];
+}
+
+export interface SubDashaLevel {
+  name: string;         // planet name
+  start: string;        // ISO date
+  end: string;          // ISO date
+}
+
+export interface SpecificSubDashaData {
+  mahadasha: string;
+  antardasha: string;
+  paryantardasha: string;
+  shookshamadasha: string;
+  pranadasha: SubDashaLevel[];
+}
+
+// Parse dates like "Thu Jul 01 1999" → ISO date "1999-07-01"
+function parseDashaDate(raw: string): string {
+  try {
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) return raw;
+    return d.toISOString().split('T')[0];
+  } catch {
+    return raw;
+  }
+}
+
+export async function getFullDashaData(input: BirthChartInput): Promise<MahaDashaEntry[]> {
+  const [mahaRaw, antarRaw] = await Promise.all([
+    tryGetBirth<Record<string, unknown>>('/dashas/maha-dasha', input),
+    tryGetBirth<Record<string, unknown>>('/dashas/antar-dasha', input),
+  ]);
+
+  if (!mahaRaw) return [];
+
+  const mahaNames = (mahaRaw['mahadasha'] as string[]) ?? [];
+  const mahaEndDates = (mahaRaw['mahadasha_order'] as string[]) ?? [];
+  const dashaStartDate = parseDashaDate(String(mahaRaw['dasha_start_date'] ?? ''));
+
+  const antarMat = (antarRaw?.['antardashas'] as string[][]) ?? [];
+  const antarDates = (antarRaw?.['antardasha_order'] as string[][]) ?? [];
+
+  return mahaNames.map((mahaPlanet, i) => {
+    // Start date: first maha starts at dasha_start_date; subsequent start at prev maha end
+    const startDate = i === 0 ? dashaStartDate : parseDashaDate(mahaEndDates[i - 1] ?? '');
+    const endDate = parseDashaDate(mahaEndDates[i] ?? '');
+
+    // Antardasha entries for this mahadasha
+    const antarNames = antarMat[i] ?? [];
+    const antarEndList = antarDates[i] ?? [];
+
+    const antars: AntarDashaEntry[] = antarNames.map((pair, j) => {
+      const antarPlanet = pair.includes('/') ? pair.split('/')[1] : pair;
+      return {
+        planet: antarPlanet,
+        endDate: parseDashaDate(antarEndList[j] ?? ''),
+      };
+    });
+
+    return { planet: mahaPlanet, startDate, endDate, antars };
+  });
+}
+
+export async function getSpecificSubDasha(
+  input: BirthChartInput,
+  md: string,
+  ad: string,
+  pd: string,
+  sd: string,
+): Promise<SpecificSubDashaData | null> {
+  try {
+    const { data } = await client.get<{ status: number; response: Record<string, unknown> }>(
+      '/dashas/specific-sub-dasha',
+      { params: { ...birthParams(input), md, ad, pd, sd } },
+    );
+    const raw = unwrap(data);
+    const pranadasha = (raw['pranadasha'] as Array<Record<string, unknown>>)?.map((p) => ({
+      name: String(p['name'] ?? ''),
+      start: parseDashaDate(String(p['start'] ?? '')),
+      end: parseDashaDate(String(p['end'] ?? '')),
+    })) ?? [];
+    return {
+      mahadasha:       String(raw['mahadasha'] ?? ''),
+      antardasha:      String(raw['antardasha'] ?? ''),
+      paryantardasha:  String(raw['paryantardasha'] ?? raw['pratyantardasha'] ?? ''),
+      shookshamadasha: String(raw['Shookshamadasha'] ?? raw['shookshamadasha'] ?? ''),
+      pranadasha,
+    };
+  } catch (err) {
+    logger.warn({ md, ad, pd, sd, err }, '[VedicAstro] specific-sub-dasha failed');
+    return null;
+  }
+}
+
 // ── Birth chart (Kundli) ──────────────────────────────────────────────────────
 
 export interface BirthChartInput {
@@ -158,6 +382,8 @@ export interface FullKundliChartData {
     nakshatraPada: number;
   };
   astroDetails:      Record<string, unknown>;
+  panchangDetails:   Record<string, unknown> | null;  // tithi, karan, yog, nakshatra, sunrise, sunset
+  avakhadaDetails:   Record<string, unknown> | null;  // varna, vashya, yoni, gan, nadi, sign, signLord
   planets:           PlanetData[];
   houseCusps:        HouseCusp[];
   dasha:             DashaPeriod[];
@@ -192,27 +418,44 @@ function birthParams(input: BirthChartInput): Record<string, unknown> {
   };
 }
 
-async function getBirth<T>(endpoint: string, input: BirthChartInput): Promise<T> {
+async function getBirth<T>(endpoint: string, input: BirthChartInput, extra: Record<string, unknown> = {}): Promise<T> {
   logger.debug({ endpoint }, '[VedicAstro] fetching birth chart data');
   const { data } = await client.get<{ status: number; response: T }>(endpoint, {
-    params: birthParams(input),
+    params: { ...birthParams(input), ...extra },
   });
   return unwrap(data);
 }
 
+// chart-image returns raw SVG bytes directly (not JSON)
+async function getChartSvg(input: BirthChartInput, div: 'D1' | 'D9', style: 'north' | 'south'): Promise<string | null> {
+  try {
+    const { data } = await client.get<string>('/horoscope/chart-image', {
+      params: { ...birthParams(input), div, style, format: 'base64', size: 300 },
+      responseType: 'text',
+    });
+    // Returns raw SVG string (starts with <?xml or <svg)
+    return typeof data === 'string' && data.trim().startsWith('<') ? data : null;
+  } catch (err) {
+    logger.warn({ div, err }, '[VedicAstro] chart-image failed');
+    return null;
+  }
+}
+
 // planet-details returns an indexed object { "0": {...}, "1": {...}, ... }
+// Actual field names confirmed from API: zodiac, zodiac_lord, retro (not is_retro), local_degree, global_degree
 function normalisePlanets(raw: Record<string, Record<string, unknown>>): PlanetData[] {
   return Object.values(raw).map((p) => ({
     name:          String(p['name'] ?? ''),
-    fullDegree:    Number(p['global_degree'] ?? p['full_degree'] ?? p['fullDegree'] ?? 0),
-    normDegree:    Number(p['local_degree'] ?? p['norm_degree'] ?? p['normDegree'] ?? 0),
+    fullDegree:    Number(p['global_degree'] ?? p['full_degree'] ?? 0),
+    normDegree:    Number(p['local_degree'] ?? p['norm_degree'] ?? 0),
     speed:         Number(p['speed'] ?? 0),
-    isRetro:       String(p['is_retro'] ?? p['isRetro'] ?? 'false').toLowerCase() === 'true',
+    // API uses 'retro' boolean field (not 'is_retro')
+    isRetro:       Boolean(p['retro'] ?? p['is_retro'] ?? false),
     sign:          String(p['zodiac'] ?? p['sign'] ?? ''),
-    signLord:      String(p['sign_lord'] ?? p['signLord'] ?? ''),
+    signLord:      String(p['zodiac_lord'] ?? p['sign_lord'] ?? ''),
     nakshatra:     String(p['nakshatra'] ?? ''),
-    nakshatraLord: String(p['nakshatra_lord'] ?? p['nakshatraLord'] ?? ''),
-    nakshatraPada: Number(p['nakshatra_pada'] ?? p['nakshatraPada'] ?? 0),
+    nakshatraLord: String(p['nakshatra_lord'] ?? ''),
+    nakshatraPada: Number(p['nakshatra_pada'] ?? 0),
     house:         Number(p['house'] ?? 0),
   }));
 }
@@ -225,15 +468,19 @@ function normaliseHouseCusps(raw: Record<string, unknown>[]): HouseCusp[] {
   }));
 }
 
-function normaliseAscendant(raw: Record<string, unknown>): FullKundliChartData['ascendant'] {
-  // ascendant-report returns fields at the response root level
+function normaliseAscendant(
+  ascRaw: Record<string, unknown>,    // from /horoscope/ascendant-report  (response[0])
+  kundliRaw: Record<string, unknown> | null, // from /extended-horoscope/extended-kundli-details
+): FullKundliChartData['ascendant'] {
+  // ascendant-report actual fields: ascendant, ascendant_lord (no nakshatra fields here)
+  // extended-kundli-details has: ascendant_sign, ascendant_nakshatra, nakshatra, nakshatra_lord, nakshatra_pada
   return {
-    sign:          String(raw['ascendant'] ?? raw['sign'] ?? raw['ascendant_sign'] ?? ''),
-    signLord:      String(raw['sign_lord'] ?? raw['signLord'] ?? ''),
-    degree:        Number(raw['degree'] ?? raw['ascendant_degree'] ?? 0),
-    nakshatra:     String(raw['nakshatra'] ?? ''),
-    nakshatraLord: String(raw['nakshatra_lord'] ?? raw['nakshatraLord'] ?? ''),
-    nakshatraPada: Number(raw['nakshatra_pada'] ?? raw['nakshatraPada'] ?? 0),
+    sign:          String(ascRaw['ascendant'] ?? kundliRaw?.['ascendant_sign'] ?? ''),
+    signLord:      String(ascRaw['ascendant_lord'] ?? ''),
+    degree:        Number(ascRaw['degree'] ?? 0),
+    nakshatra:     String(kundliRaw?.['ascendant_nakshatra'] ?? ascRaw['nakshatra'] ?? ''),
+    nakshatraLord: String(kundliRaw?.['nakshatra_lord'] ?? ''),
+    nakshatraPada: Number(kundliRaw?.['nakshatra_pada'] ?? 0),
   };
 }
 
@@ -281,18 +528,23 @@ async function tryGetBirth<T>(endpoint: string, input: BirthChartInput): Promise
 
 export async function getBirthChartData(input: BirthChartInput): Promise<FullKundliChartData> {
   // Mandatory: planet positions + ascendant details
-  const [planetsRaw, ascRaw] = await Promise.all([
+  // ascendant-report returns an array — take the first element
+  const [planetsRaw, ascArr] = await Promise.all([
     getBirth<Record<string, Record<string, unknown>>>('/horoscope/planet-details', input),
-    getBirth<Record<string, unknown>>('/horoscope/ascendant-report', input),
+    getBirth<unknown[]>('/horoscope/ascendant-report', input),
   ]);
+  const ascRaw = (Array.isArray(ascArr) ? (ascArr[0] ?? {}) : ascArr) as Record<string, unknown>;
 
   // Optional enrichment — failures don't block the report
+  // NOTE: /horoscope/panchang-details and /horoscope/avakhada-details return 404.
+  // All panchang + avakhada + nakshatra data comes from extended-kundli-details.
+  // Chart images are fetched fresh per request and NOT persisted to the DB.
   const [
     majorDashaRaw, currentDashaRaw,
     mangalRaw, kaalSarpRaw,
     sadeSatiStatusRaw, pitraRaw,
     generalRaw,
-    chartD1Raw, chartD9Raw,
+    chartD1, chartD9,
   ] = await Promise.all([
     tryGetBirth<Record<string, unknown>>('/dashas/maha-dasha', input),
     tryGetBirth<Record<string, unknown>>('/dashas/current-mahadasha', input),
@@ -301,15 +553,18 @@ export async function getBirthChartData(input: BirthChartInput): Promise<FullKun
     tryGetBirth<Record<string, unknown>>('/extended-horoscope/current-sade-sati', input),
     tryGetBirth<Record<string, unknown>>('/dosha/pitra-dosh', input),
     tryGetBirth<Record<string, unknown>>('/extended-horoscope/extended-kundli-details', input),
-    tryGetBirth<Record<string, unknown>>('/horoscope/chart-image', input),
-    tryGetBirth<Record<string, unknown>>('/horoscope/chart-image', { ...input }),  // D9 via divisional param if supported
+    getChartSvg(input, 'D1', 'north'),
+    getChartSvg(input, 'D9', 'north'),
   ]);
 
   return {
-    ascendant:         normaliseAscendant(ascRaw),
+    ascendant:         normaliseAscendant(ascRaw, generalRaw),
     planets:           normalisePlanets(planetsRaw),
-    houseCusps:        normaliseHouseCusps([]),  // house cusps come from planet-details.house fields
+    houseCusps:        normaliseHouseCusps([]),
     astroDetails:      ascRaw,
+    // Both panchang and avakhada fields live inside extended-kundli-details response
+    panchangDetails:   generalRaw ?? null,
+    avakhadaDetails:   generalRaw ?? null,
     dasha:             majorDashaRaw ? normaliseDasha(majorDashaRaw) : [],
     currentDasha:      currentDashaRaw ?? null,
     mangalDosha:       mangalRaw ? normaliseMangal(mangalRaw) : null,
@@ -318,9 +573,99 @@ export async function getBirthChartData(input: BirthChartInput): Promise<FullKun
     sadeSatiLife:      null,
     pitraDosha:        pitraRaw ?? null,
     generalPrediction: generalRaw ? String(generalRaw['bot_response'] ?? '') || null : null,
-    chartImageD1:      chartD1Raw ? String(chartD1Raw['svg'] ?? chartD1Raw['chart_image'] ?? '') || null : null,
-    chartImageD9:      chartD9Raw ? String(chartD9Raw['svg'] ?? chartD9Raw['chart_image'] ?? '') || null : null,
+    chartImageD1:      chartD1,
+    chartImageD9:      chartD9,
     input,
     computedAt:        new Date().toISOString(),
+  };
+}
+
+// ── Kundli matching (Ashtakoot / Guna Milan) ──────────────────────────────────
+
+export interface KundliMatchBreakdown {
+  varna:     { points: number; maxPoints: number; description: string };
+  vashya:    { points: number; maxPoints: number; description: string };
+  tara:      { points: number; maxPoints: number; description: string };
+  yoni:      { points: number; maxPoints: number; description: string };
+  graha:     { points: number; maxPoints: number; description: string };
+  gana:      { points: number; maxPoints: number; description: string };
+  bhakoot:   { points: number; maxPoints: number; description: string };
+  nadi:      { points: number; maxPoints: number; description: string };
+}
+
+export interface KundliMatchResult {
+  totalPoints:  number;    // out of 36
+  maxPoints:    36;
+  scoreLabel:   string;    // 'Excellent' | 'Good' | 'Average' | 'Poor'
+  breakdown:    KundliMatchBreakdown;
+  conclusion:   string;
+  manglikBoy:   boolean;
+  manglikGirl:  boolean;
+}
+
+function scoreLabel(points: number): string {
+  if (points >= 28) return 'Excellent';
+  if (points >= 21) return 'Good';
+  if (points >= 18) return 'Average';
+  return 'Poor';
+}
+
+function safeNum(v: unknown): number {
+  return typeof v === 'number' ? v : Number(v ?? 0);
+}
+
+function koota(raw: Record<string, unknown>, key: string, max: number): { points: number; maxPoints: number; description: string } {
+  const block = raw[key] as Record<string, unknown> | undefined;
+  return {
+    points:      safeNum(block?.['received_koot_points'] ?? block?.['points'] ?? block?.['score'] ?? 0),
+    maxPoints:   max,
+    description: String(block?.['description'] ?? block?.['bot_response'] ?? ''),
+  };
+}
+
+export async function getKundliMatch(
+  boy:  BirthChartInput,
+  girl: BirthChartInput,
+): Promise<KundliMatchResult> {
+  logger.debug('[VedicAstro] fetching kundli match');
+
+  // vedicastroapi uses separate boy/girl param prefixes
+  const boyP  = birthParams(boy);
+  const girlP = birthParams(girl);
+
+  const params: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(boyP))  params[`m_${k}`]  = v;
+  for (const [k, v] of Object.entries(girlP)) params[`f_${k}`]  = v;
+
+  const { data } = await client.get<{ status: number; response: Record<string, unknown> }>(
+    '/matching/ashtakoot-points',
+    { params },
+  );
+  const raw = unwrap(data);
+
+  const total = safeNum(raw['total_points'] ?? raw['totalPoints'] ?? raw['received_points'] ?? 0);
+
+  const breakdown: KundliMatchBreakdown = {
+    varna:   koota(raw, 'varna',   1),
+    vashya:  koota(raw, 'vashya',  2),
+    tara:    koota(raw, 'tara',    3),
+    yoni:    koota(raw, 'yoni',    4),
+    graha:   koota(raw, 'graha_maitri', 5),
+    gana:    koota(raw, 'gana',    6),
+    bhakoot: koota(raw, 'bhakoot', 7),
+    nadi:    koota(raw, 'nadi',    8),
+  };
+
+  const manglikBoy  = Boolean((raw['manglik_boy']  as Record<string, unknown>)?.['is_manglik']  ?? raw['manglikBoy']);
+  const manglikGirl = Boolean((raw['manglik_girl'] as Record<string, unknown>)?.['is_manglik']  ?? raw['manglikGirl']);
+
+  return {
+    totalPoints:  total,
+    maxPoints:    36,
+    scoreLabel:   scoreLabel(total),
+    breakdown,
+    conclusion:   String(raw['conclusion'] ?? raw['bot_response'] ?? ''),
+    manglikBoy,
+    manglikGirl,
   };
 }

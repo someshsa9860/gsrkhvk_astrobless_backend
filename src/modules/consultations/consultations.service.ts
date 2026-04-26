@@ -10,6 +10,7 @@ import type { Consultation, Message } from '@prisma/client';
 import type { z } from 'zod';
 import type { RequestConsultationSchema, SubmitReviewSchema } from './consultations.schema.js';
 import { tracer } from '../../lib/tracing.js';
+import { sendPush } from '../notifications/notifications.service.js';
 
 let emitToSocket: ((room: string, event: string, data: unknown) => void) | null = null;
 export function setSocketEmitter(fn: typeof emitToSocket): void {
@@ -168,6 +169,9 @@ export async function endConsultation(actorId: string, consultationId: string, r
 
   consultationDuration.observe(durationSeconds);
   emitToSocket?.(`consultation:${consultationId}`, 'consultation:ended', { consultationId, reason, durationSeconds });
+
+  const displayEarning = (astrologerEarning / 100).toFixed(2);
+  sendPush('astrologer', consultation.astrologerId, 'New Earning', `₹${displayEarning} earned from consultation.`, { type: 'earningsUpdate', consultationId }).catch(() => {});
 
   return (await repo.findById(consultationId))!;
 }

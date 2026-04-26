@@ -1032,3 +1032,31 @@ The correct pattern: import `FastifyPluginAsync` from `fastify` and `zodToJsonSc
 The wrong pattern (`FastifyPluginAsyncZod` with a direct Zod object as the `querystring` schema) breaks on Fastify v4 + zod-fastify-type-provider.
 
 The canonical example of the correct pattern is `admin/content/adminHoroscopes.routes.ts`.
+
+### ORM: Prisma (locked, 2026-04-25)
+
+**Prisma** is the ORM in use — not Drizzle. All DB access uses the `prisma` client from `src/db/client.ts`. Schema at `prisma/schema.prisma`. All table/column names are `camelCase` with `@@map`/`@map` decorators. Rule 11 references "Drizzle joins" — read that as Prisma `include`/`select`.
+
+### Kundli matching endpoints (2026-04-25)
+
+`POST /v1/customer/kundli/match` and `GET /v1/customer/kundli/matches` are implemented in `src/modules/kundli/kundli.routes.ts` + `kundli.service.ts`.
+
+`getKundliMatch(boy, girl)` in `src/lib/vedicAstroClient.ts` calls `/matching/ashtakoot-points` with `m_` / `f_` prefixed birth params. Returns `KundliMatchResult` with `totalPoints`, `scoreLabel`, per-koota `breakdown`, `conclusion`, `manglikBoy`, `manglikGirl`. Results are persisted to `kundliMatches` table.
+
+### FCM notifications — wallet and earnings (2026-04-25)
+
+`sendPush()` from `src/modules/notifications/notifications.service.ts` is called fire-and-forget at:
+- `wallet.service.ts` `applyTopupCredit` — notifies customer after topup webhook
+- `wallet.service.ts` `debitWallet` — notifies customer after each consultation minute debit
+- `adminCustomers.service.ts` `walletCredit` — notifies customer after admin manual credit
+- `consultations.service.ts` `endConsultation` — notifies astrologer with earnings amount
+
+All calls use `.catch(() => {})` to never block the critical path.
+
+### Banner schema field names (locked, 2026-04-25)
+
+Prisma `Banner` model uses: `imageKey` (S3 storage key), `startsAt`, `endsAt`. The admin banner service (`src/admin/content/adminBanners.service.ts`) calls `keyToUrl(imageKey)` and adds `imageUrl` to every response row. Admin panel and Flutter must use `imageKey`/`startsAt`/`endsAt` in request bodies — never `imageUrl`/`startAt`/`endAt`.
+
+### reason fields — optional in most admin schemas (2026-04-25)
+
+`reason: z.string().optional()` in: `BlockCustomerSchema`, `WalletAdjustSchema`, `BlockAstrologerSchema`, `AppSettingsUpdateSchema`. `CommissionOverrideSchema.reason` stays `z.string().min(3)` (required) because commission changes are high-impact financial actions.

@@ -1,5 +1,5 @@
 import { prisma } from '../../db/client.js';
-import { upsertFcmToken } from '../notifications/notifications.service.js';
+import { upsertFcmToken, subscribeToTopic, unsubscribeFromTopic } from '../notifications/notifications.service.js';
 import type { z } from 'zod';
 import type { ListNotificationsQuerySchema, MarkReadSchema } from './notifications.schema.js';
 
@@ -49,9 +49,13 @@ export async function markAllNotificationsRead(customerId: string) {
 
 export async function registerFcmToken(customerId: string, token: string, platform: 'ios' | 'android' | 'web') {
   await upsertFcmToken('customer', customerId, token, platform);
+  // Subscribe device to the customer's personal topic so sendPush() works
+  // without a DB lookup. Topic = customerId.
+  void subscribeToTopic(token, customerId);
 }
 
 export async function deleteFcmToken(customerId: string, token: string) {
+  void unsubscribeFromTopic(token, customerId);
   await prisma.fcmToken.deleteMany({
     where: { token, ownerType: 'customer', ownerId: customerId },
   });

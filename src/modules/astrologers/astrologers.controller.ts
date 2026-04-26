@@ -27,3 +27,8 @@ export async function getPublicProfile(req: FastifyRequest<{ Params: { id: strin
   const profile = await service.getPublicProfile(req.params.id);
   return reply.send({ ok: true, data: profile, traceId: req.requestContext.traceId });
 }
+
+export async function getTrendingAstrologers(req: FastifyRequest, reply: FastifyReply) {
+  const result = await service.searchAstrologers({ sort: 'rating', order: 'desc', limit: 10 });
+  return reply.send({ ok: true, data: result.items, traceId: req.requestContext.traceId });
+}

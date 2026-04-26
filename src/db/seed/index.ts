@@ -43,8 +43,8 @@ async function seedAppSettings(): Promise<void> {
     },
     {
       key: 'wallet.minBalanceFiveMin',
-      value: 5000,
-      description: 'Minimum wallet balance required to start a 5-minute consultation',
+      value: 50,
+      description: 'Minimum wallet balance required to start a 5-minute consultation (in ₹)',
       category: 'wallet',
     },
     {
@@ -61,8 +61,8 @@ async function seedAppSettings(): Promise<void> {
     },
     {
       key: 'referral.signupBonus',
-      value: 5000,
-      description: 'Wallet credit given to a new customer who signs up via referral link',
+      value: 50,
+      description: 'Wallet credit given to a new customer who signs up via referral link (in ₹)',
       category: 'referral',
     },
     {
@@ -73,14 +73,20 @@ async function seedAppSettings(): Promise<void> {
     },
     {
       key: 'aiChat.pricePerMessage',
-      value: 200,
-      description: 'Cost per AI chat message (stored in smallest currency unit: 1/100 of ₹1)',
+      value: 2,
+      description: 'Cost per AI chat message (in ₹)',
       category: 'ai',
     },
     {
       key: 'featureFlags.videoCallsEnabled',
       value: false,
       description: 'Whether video call consultations are enabled (requires Agora setup)',
+      category: 'feature',
+    },
+    {
+      key: 'featureFlags.astromallEnabled',
+      value: false,
+      description: 'Whether the AstroMall (products & orders) is visible in the app and admin panel. Off by default.',
       category: 'feature',
     },
     {

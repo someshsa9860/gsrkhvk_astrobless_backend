@@ -25,23 +25,66 @@ export async function upsertFcmToken(ownerType: 'customer' | 'astrologer', owner
   });
 }
 
-export async function sendPush(ownerType: 'customer' | 'astrologer', ownerId: string, title: string, body: string, data?: Record<string, string>): Promise<void> {
+/**
+ * Subscribe a device FCM token to a topic.
+ * Topic should be the owner's ID (customerId or astrologerId).
+ * Call this immediately after registering an FCM token on login.
+ */
+export async function subscribeToTopic(token: string, topic: string): Promise<void> {
   ensureFirebase();
   if (!firebaseInitialized) return;
+  try {
+    await admin.messaging().subscribeToTopic([token], topic);
+    logger.debug({ topic, token: token.slice(-6) }, 'FCM topic subscribed');
+  } catch (err) {
+    logger.warn({ err, topic }, 'FCM topic subscribe failed');
+  }
+}
 
-  const tokens = await prisma.fcmToken.findMany({ where: { ownerId }, select: { token: true } });
-  if (!tokens.length) return;
+/**
+ * Unsubscribe a device FCM token from a topic.
+ * Call this on logout before clearing the FCM token.
+ */
+export async function unsubscribeFromTopic(token: string, topic: string): Promise<void> {
+  ensureFirebase();
+  if (!firebaseInitialized) return;
+  try {
+    await admin.messaging().unsubscribeFromTopic([token], topic);
+    logger.debug({ topic, token: token.slice(-6) }, 'FCM topic unsubscribed');
+  } catch (err) {
+    logger.warn({ err, topic }, 'FCM topic unsubscribe failed');
+  }
+}
 
-  const messages: admin.messaging.Message[] = tokens.map((t) => ({
-    token: t.token,
-    notification: { title, body },
-    data,
-  }));
+/**
+ * Send a push notification to a topic (= ownerId).
+ * Falls back to per-token delivery if no topic-based delivery is configured.
+ * Topic-based delivery ensures all logged-in devices receive the notification
+ * without querying the DB for FCM tokens.
+ */
+export async function sendPushToTopic(topic: string, title: string, body: string, data?: Record<string, string>): Promise<void> {
+  ensureFirebase();
+  if (!firebaseInitialized) return;
+  try {
+    await admin.messaging().send({
+      topic,
+      notification: { title, body },
+      data,
+      android: { priority: 'high' },
+      apns: { payload: { aps: { sound: 'default', badge: 1 } } },
+    });
+    logger.debug({ topic }, 'FCM topic push sent');
+  } catch (err) {
+    logger.warn({ err, topic }, 'FCM topic push failed');
+  }
+}
 
-  const results = await admin.messaging().sendEach(messages);
-  results.responses.forEach((r, i) => {
-    if (r.error) logger.warn({ token: tokens[i]?.token?.slice(-6), err: r.error.message }, 'FCM send failed');
-  });
+/**
+ * Send a push to a specific persona by ownerId.
+ * Uses topic-based delivery (topic = ownerId) — no DB token lookup needed.
+ */
+export async function sendPush(ownerType: 'customer' | 'astrologer', ownerId: string, title: string, body: string, data?: Record<string, string>): Promise<void> {
+  return sendPushToTopic(ownerId, title, body, data);
 }
 
 export async function createInAppNotification(

@@ -25,7 +25,7 @@ export type KycDecisionInput = z.infer<typeof KycDecisionSchema>;
 // ── Block / Unblock ───────────────────────────────────────────────────────────
 
 export const BlockAstrologerSchema = z.object({
-  reason: z.string().min(3).describe('Reason for blocking (audited)'),
+  reason: z.string().optional().describe('Optional reason for blocking (audited)'),
 });
 
 export type BlockAstrologerInput = z.infer<typeof BlockAstrologerSchema>;

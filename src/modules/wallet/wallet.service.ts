@@ -10,6 +10,7 @@ import { DEFAULT_CURRENCY } from '../../config/constants.js';
 import { PaymentProviderCapability, type PaymentProviderKey } from '../payments/payments.types.js';
 import type { Wallet, WalletTransaction } from '@prisma/client';
 import { tracer } from '../../lib/tracing.js';
+import { sendPush } from '../notifications/notifications.service.js';
 
 export async function getWallet(customerId: string): Promise<Wallet> {
   const wallet = await repo.findWalletByCustomerId(customerId);
@@ -128,6 +129,9 @@ export async function applyTopupCredit(
   });
 
   walletTopupTotal.inc({ provider: providerKey, status: 'succeeded' });
+
+  const displayAmount = (amount / 100).toFixed(2);
+  sendPush('customer', order.customerId, 'Wallet Topped Up', `₹${displayAmount} has been added to your wallet.`, { type: 'walletUpdated' }).catch(() => {});
 }
 
 export async function debitWallet(
@@ -148,7 +152,7 @@ export async function debitWallet(
   const newBalance = wallet.balance - amount;
   await repo.updateWalletBalance(wallet.id, newBalance, tx);
 
-  return repo.insertTransaction({
+  const txn = await repo.insertTransaction({
     walletId: wallet.id,
     customerId,
     type: 'CONSULTATION_DEBIT',
@@ -159,6 +163,11 @@ export async function debitWallet(
     referenceId,
     idempotencyKey,
   }, tx);
+
+  const displayAmount = (amount / 100).toFixed(2);
+  sendPush('customer', customerId, 'Wallet Debited', `₹${displayAmount} deducted for consultation.`, { type: 'walletUpdated' }).catch(() => {});
+
+  return txn;
 }
 
 export async function getTransactions(customerId: string, page: number, limit: number) {

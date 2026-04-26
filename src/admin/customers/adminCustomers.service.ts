@@ -4,6 +4,7 @@ import { writeAuditLog } from '../../observability/auditLogger.js';
 import { paginationFrom, toPagedResult } from '../shared/listQuery.js';
 import type { CustomerListQuery, WalletAdjustInput, CreateCustomerInput, UpdateCustomerInput } from './adminCustomers.schema.js';
 import { v4 as uuidv4 } from 'uuid';
+import { sendPush } from '../../modules/notifications/notifications.service.js';
 
 // ── List ──────────────────────────────────────────────────────────────────────
 
@@ -124,6 +125,9 @@ export async function walletCredit(adminId: string, customerId: string, input: W
       tx,
     );
   });
+
+  const displayAmount = (input.amount / 100).toFixed(2);
+  sendPush('customer', customerId, 'Wallet Updated', `₹${displayAmount} has been added to your wallet by support.`, { type: 'walletUpdated' }).catch(() => {});
 
   return { newBalance };
 }

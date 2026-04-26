@@ -511,6 +511,8 @@ model KundliProfile {
   timezoneOffset  String    @default("5.5")
   chartData       Json?
   chartComputedAt DateTime? @db.Timestamptz
+  chartD1Key      String?   // storage key for D1 (Rashi) chart SVG — public/kundli/charts/:id/D1.svg
+  chartD9Key      String?   // storage key for D9 (Navamsha) chart SVG — public/kundli/charts/:id/D9.svg
   createdAt       DateTime  @default(now()) @db.Timestamptz
   updatedAt       DateTime  @default(now()) @updatedAt @db.Timestamptz
 
