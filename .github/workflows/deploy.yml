@@ -27,6 +27,8 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - run: npm run typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=3584
 
   build-and-push:
     name: Build & push to ECR
