@@ -4,7 +4,6 @@
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false,
-    "incremental": true,
-    "tsBuildInfoFile": ".tsbuildinfo"
+    "isolatedModules": true
   }
 }
