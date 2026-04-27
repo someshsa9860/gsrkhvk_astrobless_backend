@@ -1,7 +1,7 @@
 import type { Server as HttpServer } from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
-import { pubRedis, subRedis } from '../../lib/redis.js';
+import { redis, pubRedis, subRedis } from '../../lib/redis.js';
 import { verifyAccessToken } from '../../lib/jwt.js';
 import { setSocketEmitter } from '../consultations/consultations.service.js';
 import { db } from '../../db/client.js';
@@ -41,6 +41,7 @@ export function initChatGateway(httpServer: HttpServer): SocketServer {
     return next(new Error('INVALID_TOKEN'));
   });
 
+  // ── Consultation namespace ────────────────────────────────────────────────
   io.on('connection', (socket) => {
     const actorType = socket.data['actorType'] as string;
     const sub = socket.data['sub'] as string;
@@ -94,7 +95,26 @@ export function initChatGateway(httpServer: HttpServer): SocketServer {
       socket.to(`consultation:${consultationId}`).emit('message:read', { consultationId, upToMessageId, readerType: actorType, readerId: sub });
     });
 
+    // ── Presence namespace (astrologers only) ──────────────────────────────
+    // Astrologer emits presence:set { isOnline, isBusy } to broadcast status
+    socket.on('presence:set', ({ isOnline, isBusy }: { isOnline: boolean; isBusy: boolean }) => {
+      if (actorType !== 'astrologer') {
+        logger.warn({ sub }, 'Non-astrologer attempted presence:set');
+        return;
+      }
+      // Broadcast to all connected clients (customers browsing, other astrologers, etc.)
+      // Emitted to public so customers see online status
+      io?.emit('presence:update', { astrologerId: sub, isOnline, isBusy });
+      // Also store in Redis for persistence across server restarts
+      void pubRedis.set(`presence:astrologer:${sub}`, JSON.stringify({ isOnline, isBusy, updatedAt: new Date().toISOString() }), 'EX', 3600);
+    });
+
     socket.on('disconnect', () => {
+      if (actorType === 'astrologer') {
+        // Mark astrologer offline on disconnect
+        io?.emit('presence:update', { astrologerId: sub, isOnline: false, isBusy: false });
+        void pubRedis.del(`presence:astrologer:${sub}`);
+      }
       logger.debug({ sub, actorType }, 'Socket disconnected');
     });
   });
