@@ -119,6 +119,30 @@ export function initChatGateway(httpServer: HttpServer): SocketServer {
     });
   });
 
+  // ── Admin dashboard namespace ───────────────────────────────────────────
+  const adminNs = io.of('/admin/dashboard');
+  adminNs.use(async (socket, next) => {
+    const token = socket.handshake.auth['token'] as string | undefined;
+    if (!token) return next(new Error('AUTH_REQUIRED'));
+
+    try {
+      const payload = await verifyAccessToken(token, JWT_AUDIENCE.ADMIN);
+      socket.data['adminId'] = payload.sub;
+      socket.data['role'] = payload.role;
+      return next();
+    } catch {
+      return next(new Error('INVALID_TOKEN'));
+    }
+  });
+
+  adminNs.on('connection', (socket) => {
+    logger.debug({ adminId: socket.data['adminId'] }, 'Admin dashboard connected');
+
+    socket.on('disconnect', () => {
+      logger.debug({ adminId: socket.data['adminId'] }, 'Admin dashboard disconnected');
+    });
+  });
+
   // Wire emitter into consultations service
   setSocketEmitter((room, event, data) => {
     io?.to(room).emit(event, data);

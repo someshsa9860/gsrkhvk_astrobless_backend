@@ -12,6 +12,7 @@ import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
 import { redis } from './lib/redis.js';
 import { initChatGateway } from './modules/chat/chat.gateway.js';
+import { startAdminMetricsEmitter, stopAdminMetricsEmitter } from './modules/chat/adminMetrics.js';
 
 if (env.SENTRY_DSN) {
   Sentry.init({ dsn: env.SENTRY_DSN, environment: env.NODE_ENV, release: env.APP_VERSION });
@@ -25,6 +26,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'API: shutting down...');
+    stopAdminMetricsEmitter();
     await app.close();
     await redis.quit();
     logger.info('API: graceful shutdown complete');
@@ -50,6 +52,7 @@ async function main(): Promise<void> {
 
   // Initialize Socket.IO on the same HTTP server
   initChatGateway(app.server);
+  startAdminMetricsEmitter();
   logger.info('Socket.IO gateway initialized');
 
   logger.info({ port: env.PORT, host: env.HOST, env: env.NODE_ENV }, `${env.APP_NAME} API started with Socket.IO`);
