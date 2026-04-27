@@ -11,6 +11,7 @@ import { buildApp } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
 import { redis } from './lib/redis.js';
+import { initChatGateway } from './modules/chat/chat.gateway.js';
 
 if (env.SENTRY_DSN) {
   Sentry.init({ dsn: env.SENTRY_DSN, environment: env.NODE_ENV, release: env.APP_VERSION });
@@ -44,8 +45,14 @@ async function main(): Promise<void> {
     process.exit(1);
   });
 
-  await app.listen({ port: env.PORT, host: env.HOST });
-  logger.info({ port: env.PORT, host: env.HOST, env: env.NODE_ENV }, `${env.APP_NAME} API started`);
+  // Start HTTP server and attach Socket.IO
+  const server = await app.listen({ port: env.PORT, host: env.HOST });
+
+  // Initialize Socket.IO on the same HTTP server
+  initChatGateway(app.server);
+  logger.info('Socket.IO gateway initialized');
+
+  logger.info({ port: env.PORT, host: env.HOST, env: env.NODE_ENV }, `${env.APP_NAME} API started with Socket.IO`);
 }
 
 main().catch((err) => {
