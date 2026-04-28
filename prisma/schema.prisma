@@ -253,12 +253,12 @@ model PaymentOrder {
   providerKey       String    // razorpay | phonepe | googlePay | applePay | stripe | googlePlay | appleIap
   providerOrderId   String?
   providerPaymentId String?
-  amount            Int       // stored as 1/100 of ₹1 (integer, never float)
+  amount            Float     // in ₹ e.g. 12.50 = ₹12.50
   currency          String    @default("INR")
   status            String    // created | pending | paid | failed | expired
   platform          String?   // ios | android | web — which platform initiated the payment
   storeTransactionId String?  // Google Play / Apple IAP native transaction ID
-  refundedAmount    Int?      // amount refunded so far (integer, same unit as amount)
+  refundedAmount    Float?    // amount refunded so far, in ₹
   refundStatus      String?   // none | partial | full
   idempotencyKey    String    @unique
   clientPayload     String?

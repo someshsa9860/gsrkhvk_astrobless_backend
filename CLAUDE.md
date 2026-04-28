@@ -7,7 +7,7 @@
 4. **Every state-mutating service method** writes an `auditLog` row with `actorType='admin'`, in the same DB transaction.
 5. **Every catch block** that swallows an error calls `errorReporter.report(...)`.
 6. **Every route** has a complete Zod schema for OpenAPI generation, tagged `admin:{module}`.
-7. **Money is `bigint` integers (1/100 of ₹1).** Float for money = instant fail.
+7. **Money is `Float` (DOUBLE PRECISION) in Prisma / `number` in TypeScript.** Stored as decimal rupees (e.g. 12.50 = ₹12.50). Never integer paise subunits.
 8. **Every list endpoint** supports: cursor or offset pagination, sort, filter, full-text search, **export trigger** (async to BullMQ).
 9. **Every "create" / "update" / "delete" endpoint** logs before/after states.
 10. **Sensitive admin actions** (payouts, refunds, manual wallet credits, KYC approvals) require a `reason` field that is mandatory, free-text, audited.
@@ -425,7 +425,7 @@ All reports exportable.
 
 ### A6.4 Refund inbox
 
-The `refundRequests` table stores: `id`, `customerId`, `consultationId` (optional), `orderId` (optional), `pujaBookingId` (optional), `amount` (bigint, 1/100 of ₹1), `reason` (customer's reason), `status` (pending/approved/rejected), `adminNote`, `decidedBy` (admin id), `decidedAt`, `createdAt`.
+The `refundRequests` table stores: `id`, `customerId`, `consultationId` (optional), `orderId` (optional), `pujaBookingId` (optional), `amount` (Float, in ₹ e.g. 12.50), `reason` (customer's reason), `status` (pending/approved/rejected), `adminNote`, `decidedBy` (admin id), `decidedAt`, `createdAt`.
 
 ```
 GET  /v1/admin/refund-requests ?status=&from=
@@ -715,13 +715,13 @@ The `appSettings` table stores: `key` (primary), `value` (jsonb), `description`,
 
 Examples:
 - `commission.defaultPct` = `30`
-- `wallet.minBalanceFiveMin` = `5000` (stored as integer, 1/100 of ₹1)
+- `wallet.minBalanceFiveMin` = `50.00` (in ₹, e.g. 50.00 = ₹50)
 - `consultation.acceptTimeoutSeconds` = `30`
 - `consultation.lowBalanceWarningSeconds` = `60`
 - `puja.cancellationPolicy` = `{ "before24h": 100, "before12h": 50, "before6h": 25, "after": 0 }`
-- `referral.signupBonus` = `5000` (stored as integer, 1/100 of ₹1)
+- `referral.signupBonus` = `50.00` (in ₹, e.g. 50.00 = ₹50)
 - `aiChat.enabled` = `true`
-- `aiChat.pricePerMessage` = `200` (stored as integer, 1/100 of ₹1)
+- `aiChat.pricePerMessage` = `2.00` (in ₹, e.g. 2.00 = ₹2)
 - `featureFlags.videoCallsEnabled` = `false`
 
 ```

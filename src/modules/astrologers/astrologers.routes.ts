@@ -2,8 +2,10 @@ import { JWT_AUDIENCE } from '../../config/constants.js';
 import type { FastifyPluginAsync } from 'fastify';
 import * as ctrl from './astrologers.controller.js';
 import * as notifCtrl from './notifications.controller.js';
+import * as supportCtrl from './support.controller.js';
 import { UpdateAstrologerProfileSchema, SearchAstrologersQuerySchema, SetOnlineStatusSchema } from './astrologers.schema.js';
 import { RegisterFcmTokenSchema, ListNotificationsQuerySchema, MarkReadSchema } from './notifications.schema.js';
+import { CreateSupportTicketSchema, ListTicketsQuerySchema, AddTicketMessageSchema } from './support.schema.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 export const astrologerRoutes: FastifyPluginAsync = async (app) => {
@@ -87,6 +89,52 @@ export const astrologerRoutes: FastifyPluginAsync = async (app) => {
     schema: { tags: ['astrologer:notifications'], summary: 'Remove FCM token', security: [{ bearerAuth: [] }] },
     preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
     handler: notifCtrl.deleteFcmToken,
+  });
+
+  // ── Support tickets ───────────────────────────────────────────────────────
+  app.post('/v1/astrologer/support/tickets', {
+    schema: {
+      tags: ['astrologer:support'],
+      summary: 'Create support ticket',
+      security: [{ bearerAuth: [] }],
+      body: zodToJsonSchema(CreateSupportTicketSchema),
+    },
+    preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
+    handler: supportCtrl.createTicket,
+  });
+
+  app.get('/v1/astrologer/support/tickets', {
+    schema: {
+      tags: ['astrologer:support'],
+      summary: 'List my support tickets',
+      security: [{ bearerAuth: [] }],
+      querystring: zodToJsonSchema(ListTicketsQuerySchema),
+    },
+    preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
+    handler: supportCtrl.listTickets,
+  });
+
+  app.get('/v1/astrologer/support/tickets/:id', {
+    schema: { tags: ['astrologer:support'], summary: 'Get support ticket detail', security: [{ bearerAuth: [] }] },
+    preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
+    handler: supportCtrl.getTicket,
+  });
+
+  app.post('/v1/astrologer/support/tickets/:id/messages', {
+    schema: {
+      tags: ['astrologer:support'],
+      summary: 'Reply to support ticket',
+      security: [{ bearerAuth: [] }],
+      body: zodToJsonSchema(AddTicketMessageSchema),
+    },
+    preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
+    handler: supportCtrl.addMessage,
+  });
+
+  app.post('/v1/astrologer/support/tickets/:id/close', {
+    schema: { tags: ['astrologer:support'], summary: 'Close support ticket', security: [{ bearerAuth: [] }] },
+    preHandler: [app.requireAudience(JWT_AUDIENCE.ASTROLOGER)],
+    handler: supportCtrl.closeTicket,
   });
 
   // ── Customer-facing astrologer discovery ─────────────────────────────────

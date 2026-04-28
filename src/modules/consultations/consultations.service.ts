@@ -170,7 +170,7 @@ export async function endConsultation(actorId: string, consultationId: string, r
   consultationDuration.observe(durationSeconds);
   emitToSocket?.(`consultation:${consultationId}`, 'consultation:ended', { consultationId, reason, durationSeconds });
 
-  const displayEarning = (astrologerEarning / 100).toFixed(2);
+  const displayEarning = astrologerEarning.toFixed(2);
   sendPush('astrologer', consultation.astrologerId, 'New Earning', `₹${displayEarning} earned from consultation.`, { type: 'earningsUpdate', consultationId }).catch(() => {});
 
   return (await repo.findById(consultationId))!;

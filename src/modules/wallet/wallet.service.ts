@@ -132,7 +132,7 @@ export async function applyTopupCredit(
 
   walletTopupTotal.inc({ provider: providerKey, status: 'succeeded' });
 
-  const displayAmount = (amount / 100).toFixed(2);
+  const displayAmount = amount.toFixed(2);
   sendPush('customer', order.customerId, 'Wallet Topped Up', `₹${displayAmount} has been added to your wallet.`, { type: 'walletUpdated' }).catch(() => {});
 }
 
@@ -166,7 +166,7 @@ export async function debitWallet(
     idempotencyKey,
   }, tx);
 
-  const displayAmount = (amount / 100).toFixed(2);
+  const displayAmount = amount.toFixed(2);
   sendPush('customer', customerId, 'Wallet Debited', `₹${displayAmount} deducted for consultation.`, { type: 'walletUpdated' }).catch(() => {});
 
   return txn;
@@ -188,7 +188,7 @@ export async function verifyIapTopup(input: {
   customerId: string;
   platform: 'android' | 'ios';
   productId: string;
-  amount: number; // in 1/100 of ₹1
+  amount: number; // in ₹ e.g. 12.50 = ₹12.50
   idempotencyKey: string;
   /** Google Play: purchaseToken. Apple: base64 receipt data */
   token: string;
@@ -293,7 +293,7 @@ export async function verifyIapTopup(input: {
 
     walletTopupTotal.inc({ provider: providerKey, status: 'succeeded' });
 
-    const displayAmount = (amount / 100).toFixed(2);
+    const displayAmount = amount.toFixed(2);
     sendPush('customer', customerId, 'Wallet Topped Up', `₹${displayAmount} added via ${platform === 'android' ? 'Google Play' : 'App Store'}.`, { type: 'walletUpdated' }).catch(() => {});
 
     span.setAttribute('status', 'OK');
