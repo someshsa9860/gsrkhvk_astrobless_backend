@@ -2,6 +2,8 @@ import { prisma } from '../../db/client.js';
 import { AppError } from '../../lib/errors.js';
 import { writeAuditLog } from '../../observability/auditLogger.js';
 import { paginationFrom, toPagedResult } from '../shared/listQuery.js';
+import { sendTransactionalEmail } from '../../lib/email.js';
+import { sendPush } from '../../modules/notifications/notifications.service.js';
 import type {
   AstrologerListQuery,
   KycDecisionInput,
@@ -60,6 +62,21 @@ export async function decideKyc(adminId: string, astrologerId: string, input: Ky
     afterState: { kycStatus: input.decision, isVerified: isApproved },
     metadata: { note: input.note },
   });
+
+  // Email + FCM — fire-and-forget
+  if (before.email) {
+    const subject = isApproved ? 'Your KYC has been approved — Welcome to Astrobless!' : 'KYC verification update';
+    const htmlBody = isApproved
+      ? `<p>Hi ${before.displayName ?? 'Astrologer'},</p><p>Congratulations! Your KYC has been <strong>approved</strong>. You can now go online and start accepting consultations on Astrobless.</p><p>Thank you,<br/>Astrobless Team</p>`
+      : `<p>Hi ${before.displayName ?? 'Astrologer'},</p><p>Your KYC verification was <strong>not approved</strong>. ${input.note ? `Reason: ${input.note}` : 'Please contact support for more details.'}</p><p>Thank you,<br/>Astrobless Team</p>`;
+    void sendTransactionalEmail({ to: before.email, toName: before.displayName ?? undefined, subject, htmlBody }).catch(() => {});
+  }
+
+  const fcmTitle = isApproved ? 'KYC Approved 🎉' : 'KYC Update';
+  const fcmBody = isApproved
+    ? 'Your verification is complete. Go online and start earning!'
+    : `Your KYC was not approved. ${input.note ?? 'Contact support for details.'}`;
+  void sendPush('astrologer', astrologerId, fcmTitle, fcmBody, { type: 'kycStatusUpdate', kycStatus: input.decision }).catch(() => {});
 }
 
 // ── Block / Unblock ───────────────────────────────────────────────────────────
@@ -83,6 +100,17 @@ export async function blockAstrologer(adminId: string, astrologerId: string, inp
     beforeState: { isBlocked: before.isBlocked, isOnline: before.isOnline },
     afterState: { isBlocked: true, isOnline: false, blockedReason: input.reason },
   });
+
+  // Email + FCM — fire-and-forget
+  if (before.email) {
+    void sendTransactionalEmail({
+      to: before.email,
+      toName: before.displayName ?? undefined,
+      subject: 'Your Astrobless account has been suspended',
+      htmlBody: `<p>Hi ${before.displayName ?? 'Astrologer'},</p><p>Your account has been <strong>suspended</strong>. ${input.reason ? `Reason: ${input.reason}` : ''}</p><p>Please contact support if you believe this is an error.</p><p>Astrobless Team</p>`,
+    }).catch(() => {});
+  }
+  void sendPush('astrologer', astrologerId, 'Account Suspended', `Your account has been suspended. ${input.reason ?? ''}`.trim(), { type: 'accountBlocked' }).catch(() => {});
 }
 
 export async function unblockAstrologer(adminId: string, astrologerId: string) {
@@ -104,6 +132,17 @@ export async function unblockAstrologer(adminId: string, astrologerId: string) {
     beforeState: { isBlocked: before.isBlocked },
     afterState: { isBlocked: false },
   });
+
+  // Email + FCM — fire-and-forget
+  if (before.email) {
+    void sendTransactionalEmail({
+      to: before.email,
+      toName: before.displayName ?? undefined,
+      subject: 'Your Astrobless account has been reinstated',
+      htmlBody: `<p>Hi ${before.displayName ?? 'Astrologer'},</p><p>Good news! Your account has been <strong>reinstated</strong>. You can log in and start accepting consultations again.</p><p>Astrobless Team</p>`,
+    }).catch(() => {});
+  }
+  void sendPush('astrologer', astrologerId, 'Account Reinstated', 'Your account is active again. Go online and start accepting consultations!', { type: 'accountUnblocked' }).catch(() => {});
 }
 
 // ── Commission override ───────────────────────────────────────────────────────
